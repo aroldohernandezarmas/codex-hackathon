@@ -33,7 +33,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Slice JSON from a tool-result file.")
     parser.add_argument("--src", required=True, help="path to the tool-result file")
     parser.add_argument("--out", required=True, help="path to write the JSON object to")
-    parser.add_argument("--marker", default="```json", help="text marker preceding the JSON object")
+    parser.add_argument(
+        "--marker", default="```json", help="text marker preceding the JSON object"
+    )
     args = parser.parse_args()
 
     if not os.path.isfile(args.src):
@@ -49,7 +51,10 @@ def main() -> int:
     end = raw.rfind("}")
 
     if start < 0 or end < start:
-        print(f"No JSON object found in {args.src} (marker={args.marker!r})", file=sys.stderr)
+        print(
+            f"No JSON object found in {args.src} (marker={args.marker!r})",
+            file=sys.stderr,
+        )
         return 1
 
     payload = raw[start : end + 1]
