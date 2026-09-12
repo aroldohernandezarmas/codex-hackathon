@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from loguru import logger
+
 from src.server.cv.gate import Gate
 from src.server.cv.perception import Rule, Usage
 from src.server.tracker import Tracker
@@ -71,6 +73,7 @@ class SessionStore:
             Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction)),
         )
         session.usage += spec.usage  # the normalize call is billed to this session
+        logger.info("session={} usage +{} (normalize)", session.id, spec.usage)
         self._sessions[session.id] = session
         return session
 

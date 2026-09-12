@@ -14,6 +14,8 @@ from typing import Any, Iterator, Optional, Protocol
 import httpx
 from loguru import logger
 
+from src.config import XAI_PRICE_COMPLETION, XAI_PRICE_PROMPT
+
 BASE_URL = "https://api.x.ai/v1"
 
 DETECT_PROMPT = (
@@ -60,13 +62,26 @@ class Usage:
         self.calls += other.calls
         return self
 
+    @property
+    def usd(self) -> float:
+        return (
+            self.prompt * XAI_PRICE_PROMPT + self.completion * XAI_PRICE_COMPLETION
+        ) / 1_000_000
+
     def as_dict(self) -> dict:
         return {
             "prompt": self.prompt,
             "completion": self.completion,
             "total": self.prompt + self.completion,
             "calls": self.calls,
+            "usd": round(self.usd, 6),
         }
+
+    def __str__(self) -> str:
+        return (
+            f"{self.prompt}+{self.completion} tokens, "
+            f"{self.calls} calls, ${self.usd:.4f}"
+        )
 
 
 @dataclass

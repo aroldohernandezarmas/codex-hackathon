@@ -81,28 +81,22 @@ def test_health_create_reject_and_cap(world):
 def test_frame_flow_fires_once(world):
     client, perception, notifier = world
     sid = new_session(client)
-    perception.answers = [False, False, True, True, True]
+    perception.answers = [False, True, True]
     quiet, changed = jpeg("1.png"), jpeg("1.png", black_tile=True)
 
     # The model answers in a background task, so each answer shows on the NEXT status.
-    s = post_frame(client, sid, quiet).json()  # first frame: sent, baseline candidate
+    s = post_frame(client, sid, quiet).json()  # first frame: sent, baseline
     assert (s["gate"], s["sent"], s["state"]) == ("first", True, None)
-    s = post_frame(client, sid, quiet).json()  # same picture: skipped; False 1/2
-    assert (s["gate"], s["sent"], s["state"]) == ("skip", False, None)
+    s = post_frame(client, sid, quiet).json()  # same picture: skipped; baseline False
+    assert (s["gate"], s["sent"], s["state"]) == ("skip", False, False)
     assert post_frame(client, sid, changed).json()["streak"] == 1  # not yet persisted
-    assert post_frame(client, sid, changed).json()["sent"] is True  # -> False 2/2
-    s = post_frame(client, sid, quiet).json()  # baseline False confirmed
-    assert (s["streak"], s["state"]) == (1, False)
-    assert post_frame(client, sid, quiet).json()["sent"] is True  # -> True 1/2
-    s = post_frame(client, sid, changed).json()
-    assert (s["streak"], s["fired"], s["state"]) == (1, False, False)
-    assert post_frame(client, sid, changed).json()["sent"] is True  # -> True 2/2: fires
+    assert post_frame(client, sid, changed).json()["sent"] is True  # -> True: fires
     s = post_frame(client, sid, quiet).json()
     assert (s["fired"], s["state"], s["events"]) == (True, True, 1)
     s = post_frame(client, sid, changed).json()  # == anchor: skip; fired reported once
     assert (s["gate"], s["fired"]) == ("skip", False)
     assert notifier.sent == ["a cat is on the table - became true"]
-    assert perception.calls == 4
+    assert perception.calls == 2
 
     view = client.get(f"/session/{sid}").json()
     assert view["events"][0]["n"] == 0 and view["state"] is True
@@ -137,6 +131,7 @@ def test_usage_accumulates_per_session_and_resets(world):
         "completion": 10,
         "total": 410,
         "calls": 1,
+        "usd": 0.00135,  # 400*$3 + 10*$15 per 1M
     }
     other = new_session(client)
     assert client.get(f"/session/{other}/usage").json()["total"] == 0

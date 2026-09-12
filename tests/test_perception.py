@@ -63,4 +63,5 @@ async def test_usage_is_read_from_response():
         "completion": 12,
         "total": 312,
         "calls": 1,
+        "usd": 0.00108,  # 300*$3 + 12*$15 per 1M
     }

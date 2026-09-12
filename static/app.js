@@ -3,10 +3,15 @@
 
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
-const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
+const startBtn = $('start'), stopBtn = $('stop'), restartBtn = $('restart'), sample = $('sample'), sampleValue = $('sampleValue');
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
-const usage = $('usage'), resetUsageBtn = $('resetUsage');
+const usage = $('usage'), cost = $('cost'), elapsed = $('elapsed');
+let startedAt = 0, clock = null;
+function showElapsed() {
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
 const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
@@ -145,8 +150,9 @@ async function start(ruleText) {
     return;
   }
   startBtn.disabled = false;
-  startBtn.hidden = true; stopBtn.hidden = false; rule.disabled = true;
-  resetUsageBtn.hidden = false; renderUsage(session.usage);
+  startBtn.hidden = true; stopBtn.hidden = false; restartBtn.hidden = false; rule.disabled = true;
+  renderUsage(session.usage);
+  startedAt = Date.now(); showElapsed(); clock = setInterval(showElapsed, 1000);
   const arrow = session.direction === 'rising' ? 'becomes true' : 'becomes false';
   reading.textContent = `Watching for: “${session.predicate}” → ${arrow}`;
   reading.hidden = false;
@@ -157,13 +163,22 @@ async function start(ruleText) {
   tick();
 }
 
+async function restart() {
+  if (!session) return;
+  clearTimeout(timer); timer = null; clearInterval(clock); clock = null;
+  api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {});
+  session = null;
+  await start(rule.value.trim()); // camera stays open; state, events, tokens, timer reset
+}
+
 function stop(message) {
   clearTimeout(timer); timer = null;
   if (session) api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {});
   session = null;
   releaseCamera();
-  startBtn.hidden = false; stopBtn.hidden = true; rule.disabled = false;
-  reading.hidden = true; resetUsageBtn.hidden = true;
+  startBtn.hidden = false; stopBtn.hidden = true; restartBtn.hidden = true; rule.disabled = false;
+  reading.hidden = true;
+  clearInterval(clock); clock = null;
   setPill(gatePill, 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
   say(message || 'Stopped.');
 }
@@ -185,14 +200,9 @@ function render(s) {
 }
 
 function renderUsage(u) {
-  usage.textContent = `${u.total} (${u.prompt} in / ${u.completion} out, ${u.calls} calls)`;
-  usage.title = 'API tokens spent by this session';
-}
-
-async function resetUsage() {
-  if (!session) return;
-  try { renderUsage(await api(`/session/${session.session_id}/usage/reset`, { method: 'POST' })); }
-  catch (e) { say(`Reset failed: ${e.message}`, true); }
+  usage.textContent = u.total.toLocaleString();
+  usage.title = `${u.prompt} in / ${u.completion} out, ${u.calls} calls`;
+  cost.textContent = u.usd < 0.01 ? `$${u.usd.toFixed(4)}` : `$${u.usd.toFixed(2)}`;
 }
 
 // Fetches the event list and only advances knownEvents once it actually succeeds,
@@ -233,7 +243,7 @@ function showToast(text) { toast.textContent = text; toast.hidden = false; clear
 // ---------- wiring ----------
 form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
 stopBtn.addEventListener('click', () => stop());
-resetUsageBtn.addEventListener('click', resetUsage);
+restartBtn.addEventListener('click', restart);
 flip.addEventListener('click', flipCamera);
 function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
 sample.addEventListener('input', showSample);

@@ -4,13 +4,21 @@ from typing import Optional
 
 
 class Tracker:
-    def __init__(self, direction: str, persist: int = 2) -> None:
+    def __init__(self, direction: str, persist: int = 1) -> None:
         assert direction in ("rising", "falling"), direction
         self.direction = direction
         self.persist = persist
-        self.state: Optional[bool] = None  # confirmed state; None until the baseline
+        self.state: Optional[bool] = (
+            None  # confirmed state; None until the first answer
+        )
         self._candidate: Optional[bool] = None
         self._streak = 0
+
+    def __str__(self) -> str:
+        return (
+            f"state={self.state} candidate={self._candidate} "
+            f"streak={self._streak}/{self.persist}"
+        )
 
     def update(self, state_now: bool) -> bool:
         """Feed one model answer. Returns True when the event fires on this answer."""
@@ -23,6 +31,7 @@ class Tracker:
             self._candidate, self._streak = state_now, 1
         if self._streak < self.persist:
             return False
-        previous, self.state = self.state, state_now
+        self.state = state_now
         self._candidate, self._streak = None, 0
-        return previous is not None and state_now == (self.direction == "rising")
+        # No baseline needed: if the very first answer already matches, that is the event.
+        return state_now == (self.direction == "rising")

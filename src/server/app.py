@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 from pydantic import BaseModel
 
 from src import config
@@ -131,6 +132,7 @@ def create_app(
     @app.post("/session/{session_id}/usage/reset")
     async def reset_usage(session_id: str):
         session = session_or_404(session_id)
+        logger.info("session={} usage reset from {}", session_id, session.usage)
         session.usage = Usage()
         return session.usage.as_dict()
 

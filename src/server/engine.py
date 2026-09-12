@@ -39,7 +39,15 @@ async def handle_frame(
     async with session.lock:  # gate state is per-session and not thread-safe
         frame = await asyncio.to_thread(decode, jpeg)  # raises ValueError on junk
         gate = await asyncio.to_thread(session.gate.observe, frame)
-        if not gate.send or session.busy:
+        skip = "busy" if session.busy else None if gate.send else "gate"
+        logger.debug(
+            "session={} frame gate={} streak={} {}",
+            session.id,
+            gate.verdict,
+            gate.streak,
+            f"skipped: {skip}" if skip else "-> model",
+        )
+        if skip:
             return _status(session, gate, sent=False)
         session.busy = True
         session.task = asyncio.create_task(
@@ -70,8 +78,20 @@ async def _observe(
         logger.warning("session={} perception failed: {}", session_id, e)
         return
     session.usage += observation.usage
+    logger.info(
+        "session={} usage +{} -> total {}", session_id, observation.usage, session.usage
+    )
     w.evidence = observation.evidence
-    if w.tracker.update(observation.state):
+    fired = w.tracker.update(observation.state)
+    logger.info(
+        "session={} model={} evidence={!r} tracker[{}] fired={}",
+        session_id,
+        observation.state,
+        observation.evidence,
+        w.tracker,
+        fired,
+    )
+    if fired:
         became = "true" if w.direction == "rising" else "false"
         event = Event(
             len(w.events),
