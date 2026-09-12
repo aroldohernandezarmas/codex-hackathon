@@ -141,3 +141,12 @@ test('push delivers event immediately, rejects stale frame status and closes on 
   assert.equal(run('source.closed'), true);
   assert.equal(element('state').textContent, 'no rule');
 });
+
+test('Telegram rule changes update the camera page through detection status', () => {
+  const { element, run } = page();
+  run(`session = { session_id: 'camera', predicate: 'cat present', direction: 'rising' };
+    renderDetection({ revision: 1, rule: 'The door closes', predicate: 'door open', direction: 'falling', state: null, events: 0 });`);
+  assert.equal(element('rule').value, 'The door closes');
+  assert.equal(run('session.predicate'), 'door open');
+  assert.match(element('reading').textContent, /door open.*becomes false/);
+});

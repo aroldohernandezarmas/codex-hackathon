@@ -48,6 +48,8 @@ class Subscriber:
 
     token: str
     chat_id: Optional[int] = None  # Telegram chat bound via /start <token>
+    muted: bool = False
+    editing_rule: bool = False
     last_seen: float = field(default_factory=time.monotonic)
 
 
@@ -58,6 +60,9 @@ class Session:
     watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
     busy: bool = False  # a model call is in flight
     subscriber: Optional[str] = None  # Subscriber.token to notify when an event fires
+    latest_frame: bytes = b""
+    frame_at: str = ""
+    frame_received: asyncio.Event = field(default_factory=asyncio.Event)
     retry: bool = False  # retry failed perception on the next available frame
     usage: Usage = field(default_factory=Usage)  # API tokens spent by this session
     revision: int = 0

@@ -91,3 +91,32 @@ class Bot:
     async def answer_callback(self, callback_id: str) -> None:
         """Stops the spinner on the pressed button."""
         await self._call("answerCallbackQuery", json={"callback_query_id": callback_id})
+
+    async def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        buttons: Optional[Buttons] = None,
+    ) -> None:
+        try:
+            await self._call(
+                "editMessageText",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": _markup(buttons) or {"inline_keyboard": []},
+                },
+            )
+        except httpx.HTTPStatusError as exc:
+            if (
+                exc.response.status_code == 400
+                and "message is not modified" in exc.response.text
+            ):
+                return
+            raise
+
+    async def chat_action(self, chat_id: int, action: str) -> None:
+        await self._call("sendChatAction", json={"chat_id": chat_id, "action": action})
