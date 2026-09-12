@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watcher</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="app">
+  <header class="top">
+    <h1>Watcher</h1>
+    <p class="tagline">Point the camera. Say what should happen. Get told when it does.</p>
+  </header>
+
+  <section class="stage">
+    <div class="viewfinder">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas" hidden></canvas>
+      <div class="hud">
+        <span id="gate" class="pill pill-idle">camera off</span>
+        <span id="state" class="pill pill-idle">no rule</span>
+      </div>
+    </div>
+
+    <form id="ruleForm" class="rule">
+      <label for="rule">Tell me when…</label>
+      <div class="row">
+        <input id="rule" type="text" placeholder="the cat jumps onto the table" autocomplete="off" required>
+        <button id="start" type="submit">Watch</button>
+        <button id="stop" type="button" class="secondary" hidden>Stop</button>
+      </div>
+      <p id="reading" class="reading" hidden></p>
+      <p id="status" class="status">Allow the camera to begin.</p>
+      <label class="slider">every <output id="sampleValue">1.0</output>s
+        <input id="sample" type="range" min="250" max="5000" step="250" value="1000">
+      </label>
+    </form>
+  </section>
+
+  <section class="log">
+    <h2>What happened</h2>
+    <p id="evidence" class="evidence">—</p>
+    <ol id="events" class="events"></ol>
+  </section>
+</main>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
