@@ -23,16 +23,18 @@
 
 ## File structure
 
+All eight tasks are done on branch `server-engine` (PR #1). Code lives under `src/server/`; the snippets below still say `src/...` — read them as `src/server/...`.
+
 | File | Responsibility |
 |---|---|
 | `src/config.py` | env → constants (modify) |
-| `src/gate.py` | frame → `skip/change/light`, anchor + persist logic |
-| `src/tracker.py` | model answers → confirmed state → fired edge |
-| `src/perception.py` | `Rule`, `Perception` protocol, `GrokPerception` (httpx, key rotation) |
-| `src/session.py` | `Session`, `SessionStore` (cap, TTL) |
-| `src/notifier.py` | `Notifier.notify()` — logs only |
-| `src/engine.py` | `handle_frame()` — one frame through the loop |
-| `src/app.py` | FastAPI routes, static files |
+| `src/server/cv/gate.py` | frame → `skip/change/light`, anchor + persist logic |
+| `src/server/tracker.py` | model answers → confirmed state → fired edge |
+| `src/server/cv/perception.py` | `Rule`, `Perception` protocol, `GrokPerception` (httpx, key rotation) |
+| `src/server/session.py` | `Session`, `SessionStore` (cap, TTL) |
+| `src/server/notifier.py` | `Notifier.notify()` — logs only |
+| `src/server/engine.py` | `handle_frame()` — one frame through the loop |
+| `src/server/app.py` | FastAPI routes, static files |
 | `main.py` | uvicorn entry (modify) |
 | `scripts/grok_check.py` | 3-frame / 5-case provider check |
 | `tests/test_gate.py`, `tests/test_tracker.py`, `tests/test_session.py`, `tests/test_app.py` | |
