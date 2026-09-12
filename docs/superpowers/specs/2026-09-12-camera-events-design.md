@@ -48,8 +48,14 @@ The agent is a loop: sense (gate) → perceive (LLM) → remember (per-session s
    is reported by the next frame's status. One in-flight LLM call per session. Frames that
    arrive while it runs are gated but not sent (`busy: true`, dropped, not queued). No
    global lock, no queue: `MAX_SESSIONS` tabs × one call each is the whole load.
-6. **Notifier** — component with `notify(session_id, text, image_bytes)`. Logs only until
-   the Telegram phase (deep-link `/start <code>` binding, photo + caption — later).
+6. **Notifier** — `notify(session_id, watch, event)`. Base implementation logs.
+   `TelegramNotifier` (`src/server/telegram/`, active when `TELEGRAM_BOT_TOKEN` is set)
+   also sends the proof frame as a photo with the event text as caption to the chat bound
+   to the session. Binding: `POST /session` returns `telegram_link`
+   (`https://t.me/<bot>?start=<session_id>`); the page shows it as a QR code; the phone
+   opens the bot, which receives `/start <session_id>` and stores `chat_id` on the
+   session. Updates arrive by long-polling in a background task (one instance; a
+   webhook if that ever changes). Binding dies with the session.
 
 ## Sessions
 
@@ -63,7 +69,7 @@ new session.
 |---|---|---|---|
 | `GET` | `/` | — | `static/index.html` |
 | `GET` | `/health` | — | `200 {"ok": true, "sessions": n}` |
-| `POST` | `/session` | JSON `{"rule": str}` | `201 {"session_id", "predicate", "direction"}` · `400 {"error": "not_a_transition", "hint": str}` · `503 {"error": "full"}` |
+| `POST` | `/session` | JSON `{"rule": str}` | `201 {"session_id", "predicate", "direction", "telegram_link"}` (link is `null` without a bot) · `400 {"error": "not_a_transition", "hint": str}` · `503 {"error": "full"}` |
 | `POST` | `/session/{id}/frame` | multipart field `frame` (JPEG) | `200 FrameStatus` · `404` |
 | `GET` | `/session/{id}` | — | `200 SessionView` · `404` |
 | `GET` | `/session/{id}/events/{n}` | — | `200 EventView` (event + proof frame in one call) · `404` |
@@ -91,6 +97,7 @@ new session.
   "direction": "rising",
   "state": false,
   "evidence": "cat on the chair",
+  "telegram": false,             // a Telegram chat is bound to this session
   "events": [{"n": 0, "at": "2026-09-12T14:32:10Z", "text": "..."}]
 }
 
@@ -114,6 +121,7 @@ user-adjustable 250–5000).
 | `XAI_MODEL` | `grok-4.6` | vision model id; the Grok check picks the final one |
 | `MAX_SESSIONS` | `10` | parallel session cap |
 | `SESSION_TTL` | `30` | seconds without frames before a slot is freed |
+| `TELEGRAM_BOT_TOKEN` | `""` | BotFather token; empty = notifier logs only |
 | `PORT` | `8000` | Render sets this |
 | `LOG_LEVEL`, `DATA_DIR` | existing | |
 

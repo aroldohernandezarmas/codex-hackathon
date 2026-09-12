@@ -43,6 +43,7 @@ class Session:
     gate: Gate
     watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
     busy: bool = False  # a model call is in flight
+    chat_id: Optional[int] = None  # Telegram chat bound via /start <id>
     last_seen: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(
         default_factory=asyncio.Lock

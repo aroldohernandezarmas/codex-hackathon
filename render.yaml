@@ -21,3 +21,5 @@ services:
         value: "10"
       - key: SESSION_TTL
         value: "30"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false

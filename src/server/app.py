@@ -1,7 +1,10 @@
 """HTTP surface. The contract lives in docs/superpowers/specs/2026-09-12-camera-events-design.md."""
 
+import asyncio
 import base64
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -13,6 +16,8 @@ from src.server.cv.perception import GrokPerception, Perception, PerceptionError
 from src.server.engine import handle_frame
 from src.server.notifier import Notifier
 from src.server.session import Session, SessionFull, SessionStore
+from src.server.telegram.bot import Bot
+from src.server.telegram.notifier import TelegramNotifier, poll
 
 STATIC = Path(__file__).resolve().parents[2] / "static"
 
@@ -22,9 +27,22 @@ class NewSession(BaseModel):
 
 
 def create_app(
-    perception: Perception, store: SessionStore, notifier: Notifier
+    perception: Perception,
+    store: SessionStore,
+    notifier: Notifier,
+    bot: Optional[Bot] = None,
 ) -> FastAPI:
-    app = FastAPI(title="camera events")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        task = None
+        if bot is not None:
+            await bot.get_me()
+            task = asyncio.create_task(poll(bot, store))
+        yield
+        if task is not None:
+            task.cancel()
+
+    app = FastAPI(title="camera events", lifespan=lifespan)
 
     def session_or_404(session_id: str) -> Session:
         try:
@@ -77,6 +95,7 @@ def create_app(
             "session_id": session.id,
             "predicate": w.predicate,
             "direction": w.direction,
+            "telegram_link": bot.deep_link(session.id) if bot else None,
         }
 
     @app.post("/session/{session_id}/frame")
@@ -99,6 +118,7 @@ def create_app(
             "direction": w.direction,
             "state": w.tracker.state,
             "evidence": w.evidence,
+            "telegram": s.chat_id is not None,
             "events": [{"n": e.n, "at": e.at, "text": e.text} for e in w.events],
         }
 
@@ -130,4 +150,7 @@ def create_app(
 def default_app() -> FastAPI:
     perception = GrokPerception(config.XAI_API_KEYS, config.XAI_MODEL)
     store = SessionStore(config.MAX_SESSIONS, config.SESSION_TTL)
-    return create_app(perception, store, Notifier())
+    if not config.TELEGRAM_BOT_TOKEN:
+        return create_app(perception, store, Notifier())
+    bot = Bot(config.TELEGRAM_BOT_TOKEN)
+    return create_app(perception, store, TelegramNotifier(bot, store), bot)
