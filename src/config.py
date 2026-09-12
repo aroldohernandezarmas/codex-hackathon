@@ -14,4 +14,4 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 XAI_API_KEYS = [
     k.strip() for k in os.getenv("XAI_API_KEYS", "").split(",") if k.strip()
 ]
-XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.6")
+XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.20-0309-non-reasoning")
