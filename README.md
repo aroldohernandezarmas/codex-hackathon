@@ -13,6 +13,11 @@ Grok's vision API does the looking; Render hosts it; the phone just has to have 
 
 > Built at the Grok Bot Serbia Hackathon, Belgrade, 12 September 2026.
 
+![Watcher architecture: camera frames enter the server, the gate drops static scenes, only changed frames go to Grok, the tracker fires once per event and Telegram delivers the proof photo](docs/images/architecture.png)
+
+Many frames in, few model calls, one alert per event. The gate in the middle is where most
+frames die; everything to its right runs only when the scene actually changed.
+
 ## What it feels like
 
 1. **Open the page, allow the camera.**
