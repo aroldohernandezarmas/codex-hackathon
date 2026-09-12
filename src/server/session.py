@@ -56,7 +56,6 @@ class Session:
     watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
     busy: bool = False  # a model call is in flight
     subscriber: Optional[str] = None  # Subscriber.token to notify when an event fires
-    chat_id: Optional[int] = None  # Telegram chat bound via /start <id>
     usage: Usage = field(default_factory=Usage)  # API tokens spent by this session
     last_seen: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(

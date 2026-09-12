@@ -170,7 +170,7 @@ async def poll(bot: Bot, store: SessionStore, subs: Subscribers) -> None:
         try:
             updates = await bot.get_updates(offset)
         except httpx.HTTPError as e:
-            logger.warning("telegram poll failed: {}", e)
+            logger.warning("telegram poll failed: {!r}", e)
             await asyncio.sleep(3)
             continue
         for update in updates:

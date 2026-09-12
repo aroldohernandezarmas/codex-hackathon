@@ -135,7 +135,7 @@ def create_app(
             "direction": w.direction,
             "state": w.tracker.state,
             "evidence": w.evidence,
-            "telegram": s.chat_id is not None,
+            "telegram": _linked(s.subscriber),
             "usage": s.usage.as_dict(),
             "events": [{"n": e.n, "at": e.at, "text": e.text} for e in w.events],
         }
@@ -147,7 +147,8 @@ def create_app(
         return {
             "token": subscriber.token,
             "telegram_link": bot.deep_link(subscriber.token) if bot else None,
-            "linked": subscriber.chat_id is not None,  # always false today; derived, not assumed
+            "linked": subscriber.chat_id
+            is not None,  # always false today; derived, not assumed
         }
 
     @app.get("/subscriber/{token}")
@@ -168,7 +169,6 @@ def create_app(
         session = session_or_404(session_id)
         session.usage = Usage()
         return session.usage.as_dict()
-
 
     @app.get("/subscriber/{token}/qr.svg")
     async def subscriber_qr(token: str):
