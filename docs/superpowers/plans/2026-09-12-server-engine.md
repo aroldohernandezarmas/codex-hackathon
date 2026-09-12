@@ -1135,6 +1135,10 @@ def test_frame_flow_fires_once(world):
     assert view["events"][0]["n"] == 0 and view["state"] is True
     img = client.get(f"/session/{sid}/events/0.jpg")
     assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
+    ev = client.get(f"/session/{sid}/events/0").json()
+    assert ev["n"] == 0 and ev["text"] == view["events"][0]["text"]
+    assert ev["image"].startswith("data:image/jpeg;base64,")
+    assert client.get(f"/session/{sid}/events/1").status_code == 404
 
 
 def test_unknown_session_404(world):
@@ -1229,6 +1233,7 @@ async def perceive(session: Session, jpeg: bytes, perception: Perception, notifi
 # src/app.py
 """HTTP surface. The contract lives in docs/superpowers/specs/2026-09-12-camera-events-design.md."""
 
+import base64
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
@@ -1300,6 +1305,15 @@ def create_app(perception: Perception, store: SessionStore, notifier: Notifier) 
         return {"session_id": s.id, "rule": s.rule, "predicate": s.predicate, "direction": s.direction,
                 "state": s.tracker.state, "evidence": s.evidence,
                 "events": [{"n": e.n, "at": e.at, "text": e.text} for e in s.events]}
+
+    @app.get("/session/{session_id}/events/{n}")
+    async def event(session_id: str, n: int):
+        s = session_or_404(session_id)
+        if n >= len(s.events):
+            raise HTTPException(404, "no such event")
+        e = s.events[n]
+        return {"n": e.n, "at": e.at, "text": e.text,
+                "image": "data:image/jpeg;base64," + base64.b64encode(e.image).decode()}
 
     @app.get("/session/{session_id}/events/{n}.jpg")
     async def event_image(session_id: str, n: int):

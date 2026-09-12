@@ -66,6 +66,7 @@ new session.
 | `POST` | `/session` | JSON `{"rule": str}` | `201 {"session_id", "predicate", "direction"}` · `400 {"error": "not_a_transition", "hint": str}` · `503 {"error": "full"}` |
 | `POST` | `/session/{id}/frame` | multipart field `frame` (JPEG) | `200 FrameStatus` · `404` |
 | `GET` | `/session/{id}` | — | `200 SessionView` · `404` |
+| `GET` | `/session/{id}/events/{n}` | — | `200 EventView` (event + proof frame in one call) · `404` |
 | `GET` | `/session/{id}/events/{n}.jpg` | — | JPEG · `404` |
 | `DELETE` | `/session/{id}` | — | `204` |
 
@@ -91,6 +92,14 @@ new session.
   "state": false,
   "evidence": "cat on the chair",
   "events": [{"n": 0, "at": "2026-09-12T14:32:10Z", "text": "..."}]
+}
+
+// EventView
+{
+  "n": 0,
+  "at": "2026-09-12T14:32:10Z",
+  "text": "a cat is on the table — became true",
+  "image": "data:image/jpeg;base64,..."  // the proof frame, inline
 }
 ```
 
