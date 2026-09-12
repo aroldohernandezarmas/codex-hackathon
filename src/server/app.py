@@ -193,6 +193,9 @@ def create_app(
 
         async def stream():
             while not session.closed:
+                # An open stream means the page is still there, even when it is paused and
+                # uploading no frames - so this keepalive loop is what holds off the sweeper.
+                store.touch(session)
                 session.changed.clear()
                 yield "data: " + json.dumps(detection_status(session)) + "\n\n"
                 try:

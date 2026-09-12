@@ -14,7 +14,11 @@ function page() {
     return elements.get(id);
   };
   const context = vm.createContext({
-    document: { getElementById: element, body: { classList: { add() {}, remove() {} } } },
+    document: {
+      getElementById: element, body: { classList: { add() {}, remove() {} } },
+      addEventListener(name, handler) { this.handlers[name] = handler; }, handlers: {},
+      visibilityState: 'visible',
+    },
     navigator: { mediaDevices: { getUserMedia: () => new Promise(() => {}) } },
     window: { addEventListener() {} },
     localStorage: { getItem() { return null; }, setItem() {} },
@@ -62,6 +66,36 @@ test('stop during JPEG capture does not upload to a replacement session', async 
   await context.pending;
   assert.equal(context.uploads, 0);
   assert.equal(run('outstanding'), 0);
+});
+
+test('a hidden tab uploads nothing and resumes when it comes back', async () => {
+  const { context, run } = page();
+  run(`
+    session = { session_id: 'live' }; video.readyState = 2;
+    grabJpeg = async () => ({});
+    globalThis.uploads = 0; api = async () => { uploads++; return { gate: 'skip', events: 0 }; };
+    document.visibilityState = 'hidden';
+  `);
+  await run('tick()');
+  assert.equal(context.uploads, 0);
+  assert.equal(run('outstanding'), 0);
+  run("document.visibilityState = 'visible';");
+  await run('tick()');
+  assert.equal(context.uploads, 1);
+});
+
+test('coming back into view resumes at once instead of waiting out a throttled timer', async () => {
+  const { context, run } = page();
+  run(`
+    session = { session_id: 'live' }; video.readyState = 2;
+    grabJpeg = async () => ({});
+    globalThis.uploads = 0; api = async () => { uploads++; return { gate: 'skip', events: 0 }; };
+    timer = 7; globalThis.cleared = [];
+    clearTimeout = (t) => { cleared.push(t); };
+  `);
+  await context.document.handlers.visibilitychange();
+  assert.deepEqual(Array.from(context.cleared), [7]);
+  assert.equal(context.uploads, 1);
 });
 
 test('Telegram subscription survives Stop and is attached to the next session', async () => {
