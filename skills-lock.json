@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "clone-ui": {
+      "source": "santowilem/skills",
+      "sourceType": "github",
+      "skillPath": "skills/clone-ui/SKILL.md",
+      "computedHash": "0c8361c1826e55135d566f88f09c3ee07010ba8af08309d697fcb5108116b406"
+    }
+  }
+}
