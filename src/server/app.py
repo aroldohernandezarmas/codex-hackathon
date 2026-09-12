@@ -17,7 +17,15 @@ from src import config
 from src.server.cv.perception import GrokPerception, Perception, PerceptionError, Usage
 from src.server.engine import detection_status, handle_frame, watch_status
 from src.server.notifier import Notifier
-from src.server.session import Session, SessionFull, SessionStore, Subscribers
+from src.server.session import (
+    Session,
+    SessionFull,
+    SessionStore,
+    Subscribers,
+    add_watch,
+    drop_watch,
+    new_watch,
+)
 from src.server.telegram.bot import Bot
 from src.server.telegram.notifier import TelegramNotifier, poll
 
@@ -27,6 +35,10 @@ STATIC = Path(__file__).resolve().parents[2] / "static"
 class NewSession(BaseModel):
     rules: list[str]  # one per watch, 1..MAX_WATCHES
     subscriber: Optional[str] = None  # token from POST /subscriber, if the page has one
+
+
+class NewRule(BaseModel):
+    rule: str
 
 
 def create_app(
@@ -157,6 +169,65 @@ def create_app(
             return await handle_frame(session, await frame.read(), perception, notifier)
         except ValueError:
             raise HTTPException(400, "not a decodable image")
+
+    @app.post("/session/{session_id}/watches", status_code=201)
+    async def add_rule(session_id: str, body: NewRule):
+        """Add one rule to a running session; the others keep their state."""
+        session = session_or_404(session_id)
+        rule = body.rule.strip()
+        if not rule:
+            return JSONResponse(
+                {"error": "empty_rule", "hint": "describe something that happens"},
+                status_code=400,
+            )
+        if len(session.watches) >= config.MAX_WATCHES:
+            return JSONResponse(
+                {
+                    "error": "too_many_rules",
+                    "hint": f"at most {config.MAX_WATCHES} rules per camera",
+                },
+                status_code=400,
+            )
+        try:
+            spec = await perception.normalize(rule)
+        except PerceptionError as e:
+            return JSONResponse(
+                {"error": "perception", "hint": str(e)}, status_code=502
+            )
+        session.usage += spec.usage
+        if not spec.is_transition:
+            return JSONResponse(
+                {
+                    "error": "not_a_transition",
+                    "hint": "describe something that happens - e.g. 'the cat jumps onto the table'",
+                },
+                status_code=400,
+            )
+        session = session_or_404(session_id)  # may have expired during the model call
+        if not add_watch(session, new_watch(rule, spec), config.MAX_WATCHES):
+            return JSONResponse(
+                {
+                    "error": "too_many_rules",
+                    "hint": f"at most {config.MAX_WATCHES} rules per camera",
+                },
+                status_code=400,
+            )
+        return {
+            "watches": [watch_status(w) for w in session.watches],
+            "usage": session.usage.as_dict(),
+        }
+
+    @app.delete("/session/{session_id}/watches/{i}", status_code=204)
+    async def drop_rule(session_id: str, i: int):
+        session = session_or_404(session_id)
+        if i < 0 or i >= len(session.watches):
+            raise HTTPException(404, "no such rule")
+        if not drop_watch(session, i):
+            return JSONResponse(
+                {"error": "last_rule", "hint": "keep at least one rule, or stop"},
+                status_code=409,
+            )
+        return Response(status_code=204)
 
     @app.get("/session/{session_id}")
     async def view(session_id: str):

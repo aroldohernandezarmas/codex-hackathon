@@ -43,6 +43,42 @@ def new_watch(rule: str, spec: Rule) -> Watch:
     return Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction))
 
 
+# The three ways the rule set changes while a session runs (web page and Telegram share
+# them). Synchronous on purpose: no await inside, so the list never changes under the
+# engine, which snapshots it before every model call.
+
+
+def add_watch(session: "Session", watch: Watch, limit: int) -> bool:
+    if len(session.watches) >= limit:
+        return False
+    session.watches.append(watch)
+    _rules_changed(session)
+    return True
+
+
+def replace_watch(session: "Session", i: int, watch: Watch) -> bool:
+    if not 0 <= i < len(session.watches):
+        return False
+    session.watches[i] = watch
+    _rules_changed(session)
+    return True
+
+
+def drop_watch(session: "Session", i: int) -> bool:
+    """Never below one rule: a session with nothing to watch has no reason to exist."""
+    if not 0 <= i < len(session.watches) or len(session.watches) == 1:
+        return False
+    del session.watches[i]
+    _rules_changed(session)
+    return True
+
+
+def _rules_changed(session: "Session") -> None:
+    session.retry = True  # ask the model again even if the scene is quiet
+    session.revision += 1
+    session.changed.set()
+
+
 @dataclass
 class Subscriber:
     """A browser that asked for Telegram alerts.

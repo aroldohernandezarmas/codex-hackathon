@@ -35,14 +35,15 @@
     </div>
 
     <form id="ruleForm" class="rule">
-      <label for="rule">Tell me when… <small>(one rule per line, Shift+Enter for another)</small></label>
+      <label for="rule">Tell me when…</label>
+      <ul id="rules" class="rules" hidden></ul>
       <div class="row">
-        <textarea id="rule" rows="2" placeholder="the cat jumps onto the table&#10;someone opens the door" autocomplete="off" required></textarea>
-        <button id="start" type="submit">Watch</button>
-        <button id="restart" type="button" class="secondary" hidden title="New session, same rule: state, events, tokens, timer">Reset</button>
+        <input id="rule" type="text" placeholder="the cat jumps onto the table" autocomplete="off">
+        <button id="add" type="submit" class="secondary" title="Add this rule to the list">+ Add</button>
+        <button id="start" type="button">Watch</button>
+        <button id="restart" type="button" class="secondary" hidden title="New session, same rules: state, events, tokens, timer">Reset</button>
         <button id="stop" type="button" class="secondary" hidden>Stop</button>
       </div>
-      <ul id="reading" class="reading" hidden></ul>
       <p id="status" class="status">Allow the camera to begin.</p>
       <div class="usage">
         <span><b id="elapsed">0:00</b><small>time</small></span>

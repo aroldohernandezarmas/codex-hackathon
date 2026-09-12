@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
 const startBtn = $('start'), stopBtn = $('stop'), restartBtn = $('restart'), sample = $('sample'), sampleValue = $('sampleValue');
-const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
+const rules = $('rules'), addBtn = $('add'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
 const notify = $('notify'), qrLink = $('qrLink'), qrImg = $('qrImg');
 const qrFallback = $('qrFallback'), qrBadge = $('qrBadge'), qrHint = $('qrHint');
@@ -27,6 +27,7 @@ const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
 // server-side session alive across a pause of any length.
 const paused = () => document.visibilityState === 'hidden';
 let session = null;      // {session_id, watches: [{rule, predicate, direction, state, evidence}]}
+let pending = [];        // rules typed before Watch; once a session runs, session.watches is the list
 let timer = null;        // setTimeout handle for the sampling loop
 let outstanding = 0;     // uploads currently in flight
 let uploadSeq = 0;       // increasing tag for each upload, to detect out-of-order responses
@@ -211,10 +212,100 @@ async function tick() {
   }
 }
 
-const rulesFromInput = () => rule.value.split('\n').map((s) => s.trim()).filter(Boolean);
+// ---------- rules ----------
+// One list, two sources: `pending` before Watch, the server's watches once a session runs.
+// Adding and removing go through the same buttons either way; while running they also
+// hit the server, and the updates stream brings back the list (Telegram edits included).
+function renderRules() {
+  const list = session ? session.watches : pending.map((r) => ({ rule: r }));
+  rules.innerHTML = '';
+  for (const [i, w] of list.entries()) {
+    const li = document.createElement('li');
+    li.className = w.state === true ? 'true' : '';
+    const text = document.createElement('div');
+    const b = document.createElement('b');
+    b.textContent = w.rule;
+    text.append(b);
+    if (w.predicate) {
+      const meta = document.createElement('small');
+      const arrow = w.direction === 'rising' ? 'becomes true' : 'becomes false';
+      const state = w.state === null || w.state === undefined ? 'unknown' : w.state ? 'TRUE' : 'false';
+      meta.textContent = `“${w.predicate}” → ${arrow} · ${state}${w.evidence ? ` · ${w.evidence}` : ''}`;
+      text.append(meta);
+    }
+    li.append(text);
+    if (!session || list.length > 1) { // a running session keeps at least one rule
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = '✕'; x.title = 'Remove this rule';
+      x.addEventListener('click', () => removeRule(i));
+      li.append(x);
+    }
+    rules.append(li);
+  }
+  rules.hidden = !list.length;
+}
+
+async function addRule() {
+  const text = rule.value.trim();
+  if (!text || addBtn.disabled) return;
+  if (!session) {
+    pending.push(text);
+    rule.value = '';
+    renderRules();
+    say(pending.length > 1 ? `${pending.length} rules. Add more, or press Watch.` : 'Add another rule, or press Watch.');
+    return;
+  }
+  addBtn.disabled = true;
+  const currentSession = session;
+  say('Understanding the rule…');
+  try {
+    const r = await api(`/session/${currentSession.session_id}/watches`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rule: text }),
+    });
+    if (session !== currentSession) return;
+    session.watches = r.watches;
+    rule.value = '';
+    renderRules();
+    renderUsage(r.usage);
+    say('Watching.');
+  } catch (e) {
+    if (session !== currentSession) return;
+    if (e.status === 404) { stop('Session expired — start again.'); return; }
+    say(e.message, true);
+  } finally {
+    addBtn.disabled = false;
+  }
+}
+
+async function removeRule(i) {
+  if (!session) {
+    pending.splice(i, 1);
+    renderRules();
+    return;
+  }
+  const currentSession = session;
+  try {
+    await api(`/session/${currentSession.session_id}/watches/${i}`, { method: 'DELETE' });
+    if (session !== currentSession) return;
+    session.watches.splice(i, 1); // the stream confirms shortly; don't wait for it
+    renderRules();
+  } catch (e) {
+    if (session !== currentSession) return;
+    if (e.status === 404) { stop('Session expired — start again.'); return; }
+    say(e.message, true);
+  }
+}
+
+// What Watch starts with: the list, plus whatever is still typed in the box.
+function rulesToStart() {
+  const typed = rule.value.trim();
+  return typed ? [...pending, typed] : [...pending];
+}
 
 async function start(rules) {
-  if (startBtn.disabled || !rules.length) return;
+  if (startBtn.disabled) return;
+  if (!rules.length) { say('Describe something that happens, then press Watch.', true); rule.focus(); return; }
   const attempt = ++generation;
   startBtn.disabled = true;
   if (!video.srcObject) {
@@ -246,12 +337,12 @@ async function start(rules) {
     return;
   }
   startBtn.disabled = false;
-  startBtn.hidden = true; stopBtn.hidden = false; restartBtn.hidden = false; rule.disabled = true;
+  startBtn.hidden = true; stopBtn.hidden = false; restartBtn.hidden = false;
+  pending = []; rule.value = '';
   lastRevision = -1; announcedEvents = 0;
   renderUsage(session.usage);
   startedAt = Date.now(); showElapsed(); clock = setInterval(showElapsed, 1000);
-  renderWatches(session.watches);
-  reading.hidden = false;
+  renderRules();
   events.innerHTML = ''; knownEvents = 0; evidence.textContent = '—';
   outstanding = 0; uploadSeq = 0; lastRenderedSeq = -1;
   setPill(statePill, 'unknown', 'idle');
@@ -265,7 +356,7 @@ async function restart() {
   const deletion = stop(undefined, true);
   const attempt = generation;
   await deletion;
-  if (attempt === generation) await start(rulesFromInput());
+  if (attempt === generation) await start(rulesToStart());
 }
 
 function stop(message, keepCamera = false) {
@@ -273,11 +364,12 @@ function stop(message, keepCamera = false) {
   if (updates) { updates.close(); updates = null; }
   clearTimeout(timer); timer = null;
   const deletion = session ? api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {}) : Promise.resolve();
+  if (session) pending = session.watches.map((w) => w.rule); // the rules stay editable for the next Watch
   session = null;
   if (!keepCamera) releaseCamera();
-  startBtn.disabled = false;
-  startBtn.hidden = false; stopBtn.hidden = true; restartBtn.hidden = true; rule.disabled = false;
-  reading.hidden = true;
+  startBtn.disabled = false; addBtn.disabled = false;
+  startBtn.hidden = false; stopBtn.hidden = true; restartBtn.hidden = true;
+  renderRules();
   clearInterval(clock); clock = null;
   setPill(gatePill, keepCamera ? 'ready' : 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
   say(message || 'Stopped.');
@@ -306,28 +398,12 @@ function connectUpdates() {
   });
 }
 
-// One line per watch: predicate, direction, and what the model last saw.
-function renderWatches(watches) {
-  reading.innerHTML = '';
-  for (const w of watches) {
-    const li = document.createElement('li');
-    li.className = w.state === true ? 'true' : '';
-    const arrow = w.direction === 'rising' ? 'becomes true' : 'becomes false';
-    li.textContent = `“${w.predicate}” → ${arrow}`;
-    const meta = document.createElement('small');
-    meta.textContent = (w.state === null || w.state === undefined ? 'unknown' : w.state ? 'TRUE' : 'false') + (w.evidence ? ` · ${w.evidence}` : '');
-    li.append(meta);
-    reading.append(li);
-  }
-}
-
 function renderDetection(s) {
   if (!session || (s.revision !== undefined && s.revision < lastRevision)) return;
   if (s.revision !== undefined) lastRevision = s.revision;
   if (s.watches) {
-    session.watches = s.watches;
-    rule.value = s.watches.map((w) => w.rule).join('\n'); // Telegram may have edited the rules
-    renderWatches(s.watches);
+    session.watches = s.watches; // Telegram may have edited the rules
+    renderRules();
     const known = s.watches.filter((w) => w.state !== null);
     const yes = known.filter((w) => w.state).length;
     if (!known.length) setPill(statePill, 'unknown', 'idle');
@@ -386,8 +462,8 @@ let toastTimer;
 function showToast(text) { toast.textContent = text; toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 4000); }
 
 // ---------- wiring ----------
-form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rulesFromInput()); });
-rule.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
+form.addEventListener('submit', (e) => { e.preventDefault(); addRule(); }); // Enter in the box adds
+startBtn.addEventListener('click', () => { if (!session) start(rulesToStart()); });
 stopBtn.addEventListener('click', () => stop());
 restartBtn.addEventListener('click', restart);
 flip.addEventListener('click', flipCamera);

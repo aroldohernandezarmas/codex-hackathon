@@ -337,3 +337,17 @@ async def test_open_updates_stream_keeps_a_paused_session_alive():
     assert store.sweep() == 0
     assert s.id in store._sessions
     await stream.aclose()
+
+
+def test_add_and_drop_rules_on_a_running_session(world):
+    client, perception, _ = world
+    sid = new_session(client)
+    r = client.post(f"/session/{sid}/watches", json={"rule": "the cat leaves"})
+    assert r.status_code == 201
+    assert [w["direction"] for w in r.json()["watches"]] == ["rising", "falling"]
+    r = client.post(f"/session/{sid}/watches", json={"rule": "a cat"})
+    assert (r.status_code, r.json()["error"]) == (400, "not_a_transition")
+    assert client.delete(f"/session/{sid}/watches/1").status_code == 204
+    assert client.delete(f"/session/{sid}/watches/0").status_code == 409  # last one
+    assert client.delete(f"/session/{sid}/watches/7").status_code == 404
+    assert len(client.get(f"/session/{sid}").json()["watches"]) == 1

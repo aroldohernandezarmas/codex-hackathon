@@ -19,7 +19,10 @@ from src.server.session import (
     Subscriber,
     Subscribers,
     Watch,
+    add_watch,
+    drop_watch,
     new_watch,
+    replace_watch,
 )
 from src.server.telegram.bot import Bot, Buttons
 
@@ -277,9 +280,8 @@ def handle(store: SessionStore, subs: Subscribers, update: dict) -> Optional[Rep
             result.text = "✏️ <b>Keep at least one rule</b>\n\nAdd another before removing this one, or stop the watch on the camera page."
             result.buttons = [[("‹ Rules", "rules")]]
         else:
-            dropped = session.watches.pop(i)
-            session.revision += 1
-            session.changed.set()
+            dropped = session.watches[i]
+            drop_watch(session, i)
             result.text, result.buttons = rules_screen(session)
             result.text = (
                 f"🗑 <b>Removed</b> · {safe(dropped.rule, 200)}\n\n" + result.text
@@ -416,20 +418,11 @@ async def respond(
                     )
                 else:
                     watch = new_watch(rule, spec)
-                    async with session.lock:
-                        if mode == "add":
-                            done = len(session.watches) < MAX_WATCHES
-                            if done:
-                                session.watches.append(watch)
-                        else:
-                            i = int(mode.partition(":")[2])
-                            done = i < len(session.watches)
-                            if done:
-                                session.watches[i] = watch
-                        if done:
-                            session.retry = True
-                            session.revision += 1
-                            session.changed.set()
+                    done = (
+                        add_watch(session, watch, MAX_WATCHES)
+                        if mode == "add"
+                        else replace_watch(session, int(mode.partition(":")[2]), watch)
+                    )
                     sub.editing = None
                     if not done:
                         reply = Reply(
