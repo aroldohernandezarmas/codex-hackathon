@@ -1,0 +1,24 @@
+.DS_Store
+node_modules/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints
+
+# Local data
+# data/ is committed on purpose: the three camera frames the notebooks measure on
+logs/
+*.log
+
+# Jupyter RTC (jupyter-collaboration)
+.jupyter/
+.jupyter_ystore.db
+
+# Tool caches
+.code-review-graph/
+.playwright-mcp/

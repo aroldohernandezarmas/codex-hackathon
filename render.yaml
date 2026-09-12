@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: codex-hackathon
+    runtime: python
+    plan: free
+    buildCommand: pip install poetry && poetry install --only main --no-root
+    startCommand: poetry run python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.10"
+      - key: POETRY_VIRTUALENVS_IN_PROJECT
+        value: "true"
+      - key: LOG_LEVEL
+        value: INFO
