@@ -487,8 +487,10 @@ let toastTimer;
 function showToast(text) { toast.textContent = text; toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 4000); }
 
 // ---------- wiring ----------
-form.addEventListener('submit', (e) => { e.preventDefault(); addRule(); }); // Enter in the box adds
-startBtn.addEventListener('click', () => { if (!session) start(rulesToStart()); });
+// Watch is the submit button, so Enter in the box and the button do the same thing: start the
+// watch (list plus what's typed) until a session runs, then add to it. `+ Add` queues without starting.
+form.addEventListener('submit', (e) => { e.preventDefault(); session ? addRule() : start(rulesToStart()); });
+addBtn.addEventListener('click', addRule);
 stopBtn.addEventListener('click', () => stop());
 restartBtn.addEventListener('click', restart);
 flip.addEventListener('click', flipCamera);
