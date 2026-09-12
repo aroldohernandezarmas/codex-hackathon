@@ -7,7 +7,7 @@ Tests inject a fake; the provider can be swapped without touching callers.
 import base64
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import cycle
 from typing import Any, Iterator, Optional, Protocol
 
@@ -47,16 +47,41 @@ class PerceptionError(Exception):
 
 
 @dataclass
+class Usage:
+    """Tokens billed by the API. Mutable accumulator: `total += call`."""
+
+    prompt: int = 0
+    completion: int = 0
+    calls: int = 0
+
+    def __iadd__(self, other: "Usage") -> "Usage":
+        self.prompt += other.prompt
+        self.completion += other.completion
+        self.calls += other.calls
+        return self
+
+    def as_dict(self) -> dict:
+        return {
+            "prompt": self.prompt,
+            "completion": self.completion,
+            "total": self.prompt + self.completion,
+            "calls": self.calls,
+        }
+
+
+@dataclass
 class Rule:
     predicate: str
     direction: str  # rising | falling
     is_transition: bool
+    usage: Usage = field(default_factory=Usage)
 
 
 @dataclass
 class Observation:
     state: bool
     evidence: str
+    usage: Usage = field(default_factory=Usage)
 
 
 class Perception(Protocol):
@@ -90,7 +115,7 @@ class GrokPerception:
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    async def _ask(self, content: Any) -> str:
+    async def _ask(self, content: Any) -> tuple[str, Usage]:
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -113,25 +138,35 @@ class GrokPerception:
                     logger.warning("{}; retrying on next key", last)
                     continue
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"].get("content") or ""
+                body = response.json()
+                u = body.get("usage") or {}
+                usage = Usage(
+                    int(u.get("prompt_tokens", 0)),
+                    int(u.get("completion_tokens", 0)),
+                    1,
+                )
+                return body["choices"][0]["message"].get("content") or "", usage
             except httpx.HTTPError as e:
                 last = e
                 logger.warning("xai request failed: {}", e)
         raise PerceptionError(str(last))
 
     async def normalize(self, rule: str) -> Rule:
-        raw = await self._ask(NORMALIZE_PROMPT.format(rule=rule))
+        raw, usage = await self._ask(NORMALIZE_PROMPT.format(rule=rule))
         data = _json(raw)
         direction = data.get("direction")
         if direction not in ("rising", "falling") or not data.get("predicate"):
             raise PerceptionError(f"cannot parse rule from: {raw[:120]}")
         return Rule(
-            str(data["predicate"]), direction, bool(data.get("is_transition", True))
+            str(data["predicate"]),
+            direction,
+            bool(data.get("is_transition", True)),
+            usage,
         )
 
     async def detect(self, jpeg: bytes, predicate: str) -> Observation:
         image = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
-        raw = await self._ask(
+        raw, usage = await self._ask(
             [
                 {"type": "text", "text": DETECT_PROMPT.format(predicate=predicate)},
                 {"type": "image_url", "image_url": {"url": image}},
@@ -139,8 +174,10 @@ class GrokPerception:
         )
         data = _json(raw)
         if "state_now" in data:
-            return Observation(bool(data["state_now"]), str(data.get("evidence", "")))
+            return Observation(
+                bool(data["state_now"]), str(data.get("evidence", "")), usage
+            )
         found = re.findall(r"true|false", raw.lower())
         if not found:
             raise PerceptionError(f"no verdict in: {raw[:120]}")
-        return Observation(found[-1] == "true", "<unparsed>")
+        return Observation(found[-1] == "true", "<unparsed>", usage)

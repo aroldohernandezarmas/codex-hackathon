@@ -6,6 +6,7 @@ const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('
 const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
+const usage = $('usage'), resetUsageBtn = $('resetUsage');
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
 const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
@@ -108,6 +109,7 @@ async function start(ruleText) {
   }
   startBtn.disabled = false;
   startBtn.hidden = true; stopBtn.hidden = false; rule.disabled = true;
+  resetUsageBtn.hidden = false; renderUsage(session.usage);
   const arrow = session.direction === 'rising' ? 'becomes true' : 'becomes false';
   reading.textContent = `Watching for: “${session.predicate}” → ${arrow}`;
   reading.hidden = false;
@@ -124,7 +126,7 @@ function stop(message) {
   session = null;
   releaseCamera();
   startBtn.hidden = false; stopBtn.hidden = true; rule.disabled = false;
-  reading.hidden = true;
+  reading.hidden = true; resetUsageBtn.hidden = true;
   setPill(gatePill, 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
   say(message || 'Stopped.');
 }
@@ -142,6 +144,18 @@ function render(s) {
   if (s.evidence) evidence.textContent = `“${s.evidence}”`;
   if (s.events > knownEvents) refreshEvents(s.events);
   if (s.fired) { flash(); showToast('Event! ' + session.predicate); }
+  if (s.usage) renderUsage(s.usage);
+}
+
+function renderUsage(u) {
+  usage.textContent = `${u.total} (${u.prompt} in / ${u.completion} out, ${u.calls} calls)`;
+  usage.title = 'API tokens spent by this session';
+}
+
+async function resetUsage() {
+  if (!session) return;
+  try { renderUsage(await api(`/session/${session.session_id}/usage/reset`, { method: 'POST' })); }
+  catch (e) { say(`Reset failed: ${e.message}`, true); }
 }
 
 // Fetches the event list and only advances knownEvents once it actually succeeds,
@@ -182,6 +196,7 @@ function showToast(text) { toast.textContent = text; toast.hidden = false; clear
 // ---------- wiring ----------
 form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
 stopBtn.addEventListener('click', () => stop());
+resetUsageBtn.addEventListener('click', resetUsage);
 sample.addEventListener('input', () => (sampleValue.textContent = (sample.value / 1000).toFixed(2).replace(/0$/, '')));
 window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 

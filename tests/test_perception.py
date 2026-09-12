@@ -45,3 +45,22 @@ async def test_retry_on_429_then_error():
     with pytest.raises(PerceptionError):
         await make(handler).detect(b"x", "p")
     assert seen == ["A", "B"]
+
+
+async def test_usage_is_read_from_response():
+    async def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"state_now": false}'}}],
+                "usage": {"prompt_tokens": 300, "completion_tokens": 12},
+            },
+        )
+
+    obs = await make(handler).detect(b"x", "p")
+    assert obs.usage.as_dict() == {
+        "prompt": 300,
+        "completion": 12,
+        "total": 312,
+        "calls": 1,
+    }

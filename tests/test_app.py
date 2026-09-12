@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.server.app import create_app
-from src.server.cv.perception import Observation, Rule
+from src.server.cv.perception import Observation, Rule, Usage
 from src.server.notifier import Notifier
 from src.server.session import SessionStore
 
@@ -17,6 +17,7 @@ class FakePerception:
     def __init__(self) -> None:
         self.answers: list[bool] = []
         self.calls = 0
+        self.usage = (0, 0)  # (prompt, completion) billed per detect
 
     async def normalize(self, rule: str) -> Rule:
         if rule == "a cat":
@@ -26,7 +27,7 @@ class FakePerception:
 
     async def detect(self, jpeg: bytes, predicate: str) -> Observation:
         self.calls += 1
-        return Observation(self.answers.pop(0), "fake")
+        return Observation(self.answers.pop(0), "fake", Usage(*self.usage, 1))
 
 
 class SpyNotifier(Notifier):
@@ -122,3 +123,22 @@ def test_errors_and_delete(world):
     assert post_frame(client, sid, b"not a jpeg").status_code == 400
     assert client.delete(f"/session/{sid}").status_code == 204
     assert client.get(f"/session/{sid}").status_code == 404
+
+
+def test_usage_accumulates_per_session_and_resets(world):
+    client, perception, _ = world
+    perception.usage = (400, 10)
+    sid = new_session(client)
+    assert client.get(f"/session/{sid}/usage").json()["total"] == 0
+    perception.answers = [True]
+    post_frame(client, sid, jpeg("1.png"))
+    assert client.get(f"/session/{sid}/usage").json() == {
+        "prompt": 400,
+        "completion": 10,
+        "total": 410,
+        "calls": 1,
+    }
+    other = new_session(client)
+    assert client.get(f"/session/{other}/usage").json()["total"] == 0
+    assert client.post(f"/session/{sid}/usage/reset").json()["total"] == 0
+    assert client.get(f"/session/{sid}").json()["usage"]["calls"] == 0
