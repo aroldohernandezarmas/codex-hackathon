@@ -4,7 +4,7 @@
 
 **Goal:** A FastAPI server that accepts camera frames per session, gates them locally, asks xAI Grok whether the user's predicate is true in frames that changed, fires an event once on the rising/falling edge, and hands it to a (stubbed) notifier — deployed on Render.
 
-**Architecture:** Sense → perceive → remember → act loop per session. Gate and perception are straight ports of `notebooks/camera_v3.ipynb` and `notebooks/groq.ipynb`. All temporal logic (persist, edge, direction) is deterministic Python in `Tracker`. Sessions live in one in-memory dict with a cap and a TTL. Perception is the single seam (`Perception` protocol) so tests inject a fake and the provider can be swapped.
+**Architecture:** Sense → perceive → remember → act loop per session. Multi-user by construction: one asyncio process, CPU work (decode, gate) in worker threads under a per-session lock, model calls as background tasks so `POST /frame` never waits on the network. Gate and perception are straight ports of `notebooks/camera_v3.ipynb` and `notebooks/groq.ipynb`. All temporal logic (persist, edge, direction) is deterministic Python in `Tracker`. Sessions live in one in-memory dict with a cap and a TTL. Perception is the single seam (`Perception` protocol) so tests inject a fake and the provider can be swapped.
 
 **Tech Stack:** Python 3.10, Poetry, FastAPI, uvicorn, httpx, numpy, opencv-python-headless, loguru, pytest.
 
@@ -827,7 +827,7 @@ git commit -m "feat: grok perception with key rotation"
 - Consumes: `Gate`, `Tracker`, `Rule`.
 - Produces:
   - `@dataclass Event: n: int; at: str; text: str; image: bytes`
-  - `@dataclass Session: id: str; rule: str; predicate: str; direction: str; gate: Gate; tracker: Tracker; evidence: str = ""; busy: bool = False; last_seen: float; events: list[Event]`
+  - `@dataclass Session: id: str; rule: str; predicate: str; direction: str; gate: Gate; tracker: Tracker; evidence: str = ""; busy: bool = False; fired: bool = False; last_seen: float; events: list[Event]; lock: asyncio.Lock; task: Optional[asyncio.Task]`
   - `class SessionFull(Exception)`
   - `class SessionStore(max_sessions: int, ttl: float)`: `create(rule: str, spec: Rule) -> Session`, `get(session_id) -> Session` (raises `KeyError`), `touch(session)`, `delete(session_id)`, `sweep(now: float | None = None) -> int`, `__len__`.
   - `class Notifier` with `async def notify(self, session: Session, event: Event) -> None`.
@@ -896,9 +896,11 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'src.session'`
 # src/session.py
 """In-memory sessions: one gate + one tracker per browser tab, capped, expiring on silence."""
 
+import asyncio
 import secrets
 import time
 from dataclasses import dataclass, field
+from typing import Optional
 
 from src.gate import Gate
 from src.perception import Rule
@@ -927,8 +929,11 @@ class Session:
     tracker: Tracker
     evidence: str = ""
     busy: bool = False  # a model call is in flight
+    fired: bool = False  # an event fired, not yet reported in a FrameStatus
     last_seen: float = field(default_factory=time.monotonic)
     events: list[Event] = field(default_factory=list)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # frames of one tab, in order
+    task: Optional["asyncio.Task[None]"] = None  # keeps the background model call alive
 
 
 class SessionStore:
@@ -1106,20 +1111,23 @@ def test_frame_flow_fires_once(world):
     perception.answers = [False, False, True, True, True]
     quiet, changed = jpeg("1.png"), jpeg("1.png", black_tile=True)
 
+    # The model answers in a background task, so each answer shows on the NEXT status.
     s = post_frame(client, sid, quiet).json()  # first frame: sent, baseline candidate
     assert (s["gate"], s["sent"], s["state"]) == ("first", True, None)
-    s = post_frame(client, sid, quiet).json()  # same picture: skipped
-    assert (s["gate"], s["sent"]) == ("skip", False)
+    s = post_frame(client, sid, quiet).json()  # same picture: skipped; False 1/2 -> still None
+    assert (s["gate"], s["sent"], s["state"]) == ("skip", False, None)
     assert post_frame(client, sid, changed).json()["streak"] == 1  # change, not yet persisted
-    s = post_frame(client, sid, changed).json()  # persisted: sent -> False (baseline confirmed)
-    assert (s["sent"], s["state"]) == (True, False)
-    # anchor moved; go back to the quiet picture twice -> sent -> True (1/2), then again -> True (2/2) fires
-    assert post_frame(client, sid, quiet).json()["streak"] == 1
+    assert post_frame(client, sid, changed).json()["sent"] is True  # persisted: sent -> False 2/2
+    # anchor moved; back to the quiet picture: baseline False is confirmed now
     s = post_frame(client, sid, quiet).json()
-    assert (s["sent"], s["fired"], s["state"]) == (True, False, False)
-    assert post_frame(client, sid, changed).json()["streak"] == 1
+    assert (s["streak"], s["state"]) == (1, False)
+    assert post_frame(client, sid, quiet).json()["sent"] is True  # -> True 1/2
     s = post_frame(client, sid, changed).json()
-    assert (s["sent"], s["fired"], s["state"], s["events"]) == (True, True, True, 1)
+    assert (s["streak"], s["fired"], s["state"]) == (1, False, False)
+    assert post_frame(client, sid, changed).json()["sent"] is True  # -> True 2/2: fires
+    s = post_frame(client, sid, quiet).json()
+    assert (s["fired"], s["state"], s["events"]) == (True, True, 1)
+    assert post_frame(client, sid, quiet).json()["fired"] is False  # reported once
     assert notifier.sent == ["a cat is on the table — became true"]
     assert perception.calls == 4
 
@@ -1148,7 +1156,7 @@ def test_delete(world):
     assert client.get(f"/session/{sid}").status_code == 404
 ```
 
-Note on `test_frame_flow_fires_once`: the fake answers are consumed in order — `False` (first frame), `False` (confirms baseline false), `True`, `True` (second true → flip → fire). The 5th answer is spare. `perception.calls == 4` pins that dropped/skipped frames never reach the model.
+Note on `test_frame_flow_fires_once`: the fake answers are consumed in order — `False` (first frame), `False` (confirms baseline false), `True`, `True` (second true → flip → fire). The 5th answer is spare. `perception.calls == 4` pins that dropped/skipped frames never reach the model. The fake `detect` never awaits anything, so the background task finishes on the next loop tick, before `TestClient` sends the following request — that is why the answer is asserted on the next frame's status, never on the frame that was sent.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1159,45 +1167,60 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'src.app'`
 
 ```python
 # src/engine.py
-"""One frame through the loop: gate -> model -> tracker -> notifier."""
+"""One frame through the loop: gate -> model -> tracker -> notifier.
 
+Multi-user: many browser tabs post frames into one event loop. Two rules keep one user
+from stalling the others: decode + gate (cv2/numpy, CPU-bound) run in a worker thread,
+and the model call runs as a background task — POST /frame returns at once with
+sent=True, and the answer shows up in the next frame's status (state/evidence/fired/events).
+"""
+
+import asyncio
 from datetime import datetime, timezone
 
 from loguru import logger
 
-from src.gate import decode
+from src.gate import GateResult, decode
 from src.notifier import Notifier
 from src.perception import Perception, PerceptionError
 from src.session import Event, Session
 
 
+def _status(session: Session, gate: GateResult, sent: bool) -> dict:
+    fired, session.fired = session.fired, False  # reported once, on the next status
+    return {"gate": gate.verdict, "streak": gate.streak, "sent": sent, "busy": session.busy,
+            "state": session.tracker.state, "evidence": session.evidence, "fired": fired,
+            "events": len(session.events)}
+
+
 async def handle_frame(session: Session, jpeg: bytes, perception: Perception, notifier: Notifier) -> dict:
-    frame = decode(jpeg)  # raises ValueError on junk
-    gate = session.gate.observe(frame)
-    status = {"gate": gate.verdict, "streak": gate.streak, "sent": False, "busy": session.busy,
-              "state": session.tracker.state, "evidence": session.evidence, "fired": False,
-              "events": len(session.events)}
-    if not gate.send or session.busy:
-        return status
-    session.busy = True
+    async with session.lock:  # gate state is per-session and not thread-safe
+        frame = await asyncio.to_thread(decode, jpeg)  # raises ValueError on junk
+        gate = await asyncio.to_thread(session.gate.observe, frame)
+        if not gate.send or session.busy:
+            return _status(session, gate, sent=False)
+        session.busy = True
+        session.task = asyncio.create_task(perceive(session, jpeg, perception, notifier))
+        return _status(session, gate, sent=True)
+
+
+async def perceive(session: Session, jpeg: bytes, perception: Perception, notifier: Notifier) -> None:
+    """Background: ask the model, update the tracker, fire the edge. Never raises."""
     try:
         observation = await perception.detect(jpeg, session.predicate)
     except PerceptionError as e:
         logger.warning("session={} perception failed: {}", session.id, e)
-        return status
+        return
     finally:
         session.busy = False
     session.evidence = observation.evidence
-    fired = session.tracker.update(observation.state)
-    if fired:
+    if session.tracker.update(observation.state):
         became = "true" if session.direction == "rising" else "false"
         event = Event(len(session.events), datetime.now(timezone.utc).isoformat(timespec="seconds"),
                       f"{session.predicate} — became {became}", jpeg)
         session.events.append(event)
+        session.fired = True
         await notifier.notify(session, event)
-    status.update(sent=True, state=session.tracker.state, evidence=session.evidence,
-                  fired=fired, events=len(session.events))
-    return status
 ```
 
 - [ ] **Step 4: Implement the app**

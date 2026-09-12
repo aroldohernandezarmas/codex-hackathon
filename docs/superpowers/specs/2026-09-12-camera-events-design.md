@@ -40,8 +40,14 @@ The agent is a loop: sense (gate) → perceive (LLM) → remember (per-session s
 4. **Event** — the answer must hold 2 consecutive calls to become the confirmed state.
    Fires once when the confirmed state flips to `true` (rising) or `false` (falling). The
    first confirmed state is a baseline and never fires. No cooldown, no heartbeat.
-5. **Concurrency** — one in-flight LLM call per session. Frames that arrive while it runs
-   are gated but not sent (dropped, not queued).
+5. **Concurrency** — one asyncio process serves many browser tabs at once; no user may
+   stall another. Per frame: decode + gate (cv2/numpy, CPU-bound) run in a worker thread
+   via `asyncio.to_thread` under a per-session lock, so the event loop stays free and one
+   session's frames are processed in order. The model call is a background task:
+   `POST /frame` returns at once with `sent: true`; the answer lands in session state and
+   is reported by the next frame's status. One in-flight LLM call per session. Frames that
+   arrive while it runs are gated but not sent (`busy: true`, dropped, not queued). No
+   global lock, no queue: `MAX_SESSIONS` tabs × one call each is the whole load.
 6. **Notifier** — component with `notify(session_id, text, image_bytes)`. Logs only until
    the Telegram phase (deep-link `/start <code>` binding, photo + caption — later).
 
@@ -68,11 +74,11 @@ new session.
 {
   "gate": "first" | "skip" | "change" | "light",
   "streak": 0,                 // frames the current verdict has held
-  "sent": false,               // this frame went to the model
+  "sent": false,               // this frame went to the model (async; result on a later status)
   "busy": false,               // a model call was already in flight; frame not sent
   "state": true | false | null,// confirmed predicate state, null until the baseline
   "evidence": "cat on the chair",
-  "fired": false,              // an event fired on this frame
+  "fired": false,              // an event fired since the previous status (model answers in the background)
   "events": 1                  // total events so far
 }
 
