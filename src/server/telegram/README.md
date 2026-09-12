@@ -11,17 +11,27 @@ is called directly over `httpx`.
 
 ## How binding works
 
-Nothing is stored between restarts. A chat is bound to a session, and dies with it.
+A chat is bound to a **subscriber** — a browser, not a watch. The binding therefore
+outlives any single session, which is what lets the page show the QR before a rule
+exists. Nothing is stored between restarts.
 
-1. `POST /session` returns `telegram_link` — `https://t.me/<bot>?start=<session_id>`.
-2. The page shows it as a QR code (`GET /session/{id}/qr.svg`) or a link.
-3. The phone opens the bot; Telegram sends `/start <session_id>` to the bot.
-4. `poll()` receives it, `handle()` sets `session.chat_id`, the bot replies "Linked" with
-   two inline buttons: **Status** and **Stop**.
-5. When the engine fires an event, `TelegramNotifier.notify()` looks the session up by
-   id and sends the proof frame to that chat. No chat bound → log line only.
+1. `POST /subscriber` mints a token (`Subscribers.create`, `src/server/session.py`) and
+   returns `telegram_link` — `https://t.me/<bot>?start=<token>`. The page keeps the token
+   in `localStorage`, so one scan covers every later watch from that browser.
+2. The page shows the link as a QR code (`GET /subscriber/{token}/qr.svg`).
+3. The phone opens the bot; Telegram sends `/start <token>` to the bot.
+4. `poll()` receives it, `handle()` sets `subscriber.chat_id`, the bot replies "Linked"
+   with two inline buttons: **Status** and **Stop**.
+5. `POST /session` carries the token, so the new session records `session.subscriber`.
+6. When the engine fires an event, `TelegramNotifier.notify()` resolves
+   session → subscriber → chat and sends the proof frame there. No chat bound → log only.
 
-One chat per session. A second scan of the same QR replaces the first chat.
+The page polls `GET /subscriber/{token}` every 5 s; that `linked` flag is the only thing
+driving whether the QR is on screen. It shows whenever the browser is not linked, and
+disappears once it is.
+
+One chat per subscriber. A second scan of the same QR replaces the first chat. A token
+the server no longer knows (expired, or a restart) 404s, and the page mints a new one.
 
 ## Setup
 
@@ -50,11 +60,12 @@ from src.server.telegram.bot import Bot
 from src.server.telegram.notifier import TelegramNotifier, poll
 
 bot = Bot(token)
-notifier = TelegramNotifier(bot, store)          # store: SessionStore
+subs = Subscribers(max_subscribers, ttl)         # browser -> chat, outlives sessions
+notifier = TelegramNotifier(bot, store, subs)    # store: SessionStore
 
 # at startup, inside the running event loop
 await bot.get_me()
-task = asyncio.create_task(poll(bot, store))     # runs until cancelled
+task = asyncio.create_task(poll(bot, store, subs))   # runs until cancelled
 
 # somewhere in the engine, when an event fires
 await notifier.notify(session.id, session.watch, event)
@@ -73,11 +84,12 @@ swap the implementation and nothing else moves.
 | Command / button | Reply |
 |---|---|
 | `/start` | welcome with the three steps |
-| `/start <id>` | binds the chat, "Linked" + buttons |
+| `/start <token>` | binds the chat, "Linked" + buttons |
 | `/status`, **Status** | rule, whether it is true now, what the model saw, event count |
+| `/status` with no watch running | "Linked. Nothing is being watched yet" |
 | `/stop`, **Stop** | unbinds the chat |
 
-Unknown session → "That session is gone, reload and scan again". Not bound → "Open the
+Unknown token → "That code is stale, reload and scan again". Not bound → "Open the
 page and scan its QR code". Messages are HTML; user text goes through `html.escape`.
 
 ## Event message
@@ -97,17 +109,19 @@ Photo = the frame that fired the event. Caption:
   the same token (for example local dev and Render at once). Use a second bot for local
   work. If the service ever runs more than one process, replace `poll()` with a webhook:
   `setWebhook` on startup and a `POST /telegram` route that feeds updates to `handle()`.
-- **Binding lives in memory.** Server restart or session TTL (30 s without frames) drops
-  it; the user scans again.
-- **One chat per session.** Several recipients → `chat_ids: list[int]` on `Session` and a
-  loop in `notify()`.
+- **Binding lives in memory.** A server restart drops it and the user scans again;
+  `SUBSCRIBER_TTL` (default 24 h, refreshed by the page's poll) drops idle ones.
+  Persisting it means a real store keyed by the token.
+- **One chat per subscriber.** Several recipients → `chat_ids: list[int]` on `Subscriber`
+  and a loop in `notify()`.
 - **Bot API errors** during send or reply are logged as warnings and never reach the
   frame request; a broken Telegram never slows the camera loop.
 
 ## Tests
 
-`tests/test_telegram.py` — deep link and QR, bind / status / stop through `handle()`,
-photo sent only when bound. Bot API is mocked with `httpx.MockTransport`; no token needed.
+`tests/test_telegram.py` — deep link and QR, bind-before-any-rule / status / stop through
+`handle()`, photo sent only when a chat is bound. `tests/test_app.py` covers the
+`/subscriber` routes. Bot API is mocked with `httpx.MockTransport`; no token needed.
 
 ```bash
 poetry run pytest tests/test_telegram.py -v

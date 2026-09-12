@@ -38,12 +38,24 @@ class Watch:
 
 
 @dataclass
+class Subscriber:
+    """A browser that asked for Telegram alerts.
+
+    Deliberately not part of Session: the chat is bound once, before any rule exists,
+    and carries into every watch that browser starts afterwards."""
+
+    token: str
+    chat_id: Optional[int] = None  # Telegram chat bound via /start <token>
+    last_seen: float = field(default_factory=time.monotonic)
+
+
+@dataclass
 class Session:
     id: str
     gate: Gate
     watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
     busy: bool = False  # a model call is in flight
-    chat_id: Optional[int] = None  # Telegram chat bound via /start <id>
+    subscriber: Optional[str] = None  # Subscriber.token to notify when an event fires
     last_seen: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(
         default_factory=asyncio.Lock
@@ -89,4 +101,53 @@ class SessionStore:
         dead = [k for k, s in self._sessions.items() if now - s.last_seen > self.ttl]
         for k in dead:
             del self._sessions[k]
+        return len(dead)
+
+
+class Subscribers:
+    """Browser -> Telegram chat, keyed by an opaque token the page keeps in localStorage.
+
+    Outlives sessions, dies with the process - the same "nothing is stored between
+    restarts" rule the sessions follow. A restart just means the page subscribes again.
+    """
+
+    def __init__(self, max_subscribers: int, ttl: float) -> None:
+        self.max_subscribers = max_subscribers
+        self.ttl = ttl
+        self._subscribers: dict[str, Subscriber] = {}
+
+    def __len__(self) -> int:
+        return len(self._subscribers)
+
+    def create(self) -> Subscriber:
+        self.sweep()
+        # Evict the stalest instead of refusing: subscribing costs nothing and a new
+        # browser must always get a QR, unlike a session which holds a model budget.
+        while len(self._subscribers) >= self.max_subscribers:
+            stalest = min(self._subscribers.values(), key=lambda s: s.last_seen)
+            del self._subscribers[stalest.token]
+        subscriber = Subscriber(secrets.token_urlsafe(9))
+        self._subscribers[subscriber.token] = subscriber
+        return subscriber
+
+    def __contains__(self, token: object) -> bool:
+        return token in self._subscribers
+
+    def get(self, token: str) -> Subscriber:
+        """Raises KeyError. Touches: an open page polls, and polling keeps it alive."""
+        subscriber = self._subscribers[token]
+        subscriber.last_seen = time.monotonic()
+        return subscriber
+
+    def by_chat(self, chat_id: int) -> Optional[Subscriber]:
+        # ponytail: linear scan, MAX_SUBSCRIBERS is small
+        return next(
+            (s for s in self._subscribers.values() if s.chat_id == chat_id), None
+        )
+
+    def sweep(self, now: float | None = None) -> int:
+        now = time.monotonic() if now is None else now
+        dead = [k for k, s in self._subscribers.items() if now - s.last_seen > self.ttl]
+        for k in dead:
+            del self._subscribers[k]
         return len(dead)

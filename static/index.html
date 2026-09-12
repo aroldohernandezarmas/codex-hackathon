@@ -14,6 +14,7 @@
     <p class="tagline">Point the camera. Say what should happen. Get told when it does.</p>
   </header>
 
+  <div class="workspace">
   <section class="stage">
     <div class="viewfinder">
       <video id="video" autoplay playsinline muted></video>
@@ -39,6 +40,17 @@
       </label>
     </form>
   </section>
+
+  <aside id="notify" class="notify" hidden>
+    <h2>Notify my phone</h2>
+    <a id="qrLink" class="qr" target="_blank" rel="noopener">
+      <img id="qrImg" alt="">
+      <span id="qrFallback" class="qr-fallback" hidden>Open in Telegram</span>
+    </a>
+    <span id="qrBadge" class="pill pill-idle">not linked</span>
+    <p id="qrHint" class="qr-hint">Scan to get events in Telegram.</p>
+  </aside>
+  </div>
 
   <section class="log">
     <h2>What happened</h2>

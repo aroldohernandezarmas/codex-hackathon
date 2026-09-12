@@ -6,6 +6,11 @@ const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('
 const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
+const notify = $('notify'), qrLink = $('qrLink'), qrImg = $('qrImg');
+const qrFallback = $('qrFallback'), qrBadge = $('qrBadge'), qrHint = $('qrHint');
+
+const SUB_KEY = 'watcher.subscriber'; // the token survives reloads, so one scan is enough
+const SUB_POLL_MS = 5000;
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
 const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
@@ -85,6 +90,73 @@ function grabJpeg() {
   return new Promise((r) => canvas.toBlob(r, 'image/jpeg', JPEG_QUALITY));
 }
 
+// ---------- telegram subscription ----------
+// The token is the binding code, and it outlives every watch - so the QR can be shown
+// before any rule exists, and one scan covers every watch this browser starts.
+let subscriber = null;
+
+async function subscribe() {
+  const saved = localStorage.getItem(SUB_KEY);
+  if (saved) {
+    try {
+      return await api(`/subscriber/${saved}`); // still known to this server?
+    } catch (e) {
+      if (e.status !== 404) throw e; // 404: expired, or a server restart wiped it
+    }
+  }
+  const fresh = await api('/subscriber', { method: 'POST' });
+  localStorage.setItem(SUB_KEY, fresh.token);
+  return fresh;
+}
+
+// The QR stays on screen whether or not the chat is linked - only the badge changes.
+// It is hidden in exactly one case: no bot is configured, so there is nothing to offer.
+function showSubscription(s) {
+  subscriber = s.token;
+  if (!s.telegram_link) {
+    notify.hidden = true;
+    return;
+  }
+  qrLink.href = s.telegram_link;
+  const src = `/subscriber/${s.token}/qr.svg`;
+  // A failed image is retried on the next poll; comparing against the token rather than
+  // the full src keeps a cache-busted retry from looping.
+  if (qrImg.dataset.token !== s.token || qrImg.dataset.failed === '1') {
+    qrImg.dataset.token = s.token;
+    delete qrImg.dataset.failed;
+    qrImg.src = qrImg.dataset.retry ? `${src}?r=${Date.now()}` : src;
+  }
+  setPill(qrBadge, s.linked ? '✓ linked' : 'not linked', s.linked ? 'true' : 'idle');
+  qrHint.textContent = s.linked
+    ? 'Events go to your Telegram chat.'
+    : 'Scan to get events in Telegram.';
+  notify.hidden = false;
+}
+
+// An unreachable QR must not leave a broken image on a white plate - fall back to a
+// plain link, which is what the phone running this page would tap anyway.
+qrImg.addEventListener('error', () => {
+  if (!qrImg.getAttribute('src')) return; // src cleared, not a real failure
+  qrImg.dataset.failed = '1';
+  qrImg.dataset.retry = '1';
+  qrImg.hidden = true;
+  qrFallback.hidden = false;
+});
+qrImg.addEventListener('load', () => {
+  qrImg.hidden = false;
+  qrFallback.hidden = true;
+  delete qrImg.dataset.retry;
+});
+
+async function watchSubscription() {
+  try {
+    showSubscription(await subscribe());
+  } catch (e) {
+    notify.hidden = true; // no channel to offer - the page still works without one
+  }
+  setTimeout(watchSubscription, SUB_POLL_MS);
+}
+
 // ---------- api ----------
 async function api(path, init) {
   const res = await fetch(path, init);
@@ -135,7 +207,8 @@ async function start(ruleText) {
   say('Understanding the rule…');
   try {
     session = await api('/session', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rule: ruleText }),
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rule: ruleText, subscriber: subscriber }),
     });
   } catch (e) {
     startBtn.disabled = false;
@@ -225,6 +298,7 @@ sample.addEventListener('input', showSample);
 showSample();
 window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
+watchSubscription();
 openCamera()
   .then(revealFlipIfMultiCamera)
   .catch((e) => say(`Camera unavailable: ${e.message}. Use https:// or localhost.`, true));

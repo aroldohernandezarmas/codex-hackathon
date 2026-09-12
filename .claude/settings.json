@@ -9,7 +9,10 @@
       "Bash(curl -s http://localhost:8000/static/style.css)",
       "Bash(sed -n '/max-width: 480px/,/^}/p')",
       "Bash(curl -s http://localhost:8000/static/app.js)",
-      "Bash(pkill -f \"python main.py\")"
+      "Bash(pkill -f \"python main.py\")",
+      "Bash(node --check static/app.js)",
+      "Bash(make format *)",
+      "Bash(make install *)"
     ]
   }
 }
