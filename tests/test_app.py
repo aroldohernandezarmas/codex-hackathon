@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.server.app import create_app
-from src.server.cv.perception import Observation, Rule, Usage
+from src.server.cv.perception import Detection, Observation, Rule, Usage
 from src.server.notifier import Notifier
 from src.server.session import SessionStore, Subscribers
 from src.server.telegram.bot import Bot
@@ -27,9 +27,12 @@ class FakePerception:
         direction = "falling" if "leaves" in rule else "rising"
         return Rule("a cat is on the table", direction, True)
 
-    async def detect(self, jpeg: bytes, predicate: str) -> Observation:
+    async def detect(self, jpeg: bytes, predicates: list[str]) -> Detection:
         self.calls += 1
-        return Observation(self.answers.pop(0), "fake", Usage(*self.usage, 1))
+        answer = self.answers.pop(0)
+        return Detection(
+            [Observation(answer, "fake") for _ in predicates], Usage(*self.usage, 1)
+        )
 
 
 class SpyNotifier(Notifier):
@@ -84,22 +87,25 @@ def post_frame(client, sid, data):
 
 
 def new_session(client, rule="the cat jumps onto the table") -> str:
-    return client.post("/session", json={"rule": rule}).json()["session_id"]
+    return client.post("/session", json={"rules": [rule]}).json()["session_id"]
 
 
 def test_health_create_reject_and_cap(world):
     client, _, _ = world
     assert client.get("/health").json() == {"ok": True, "sessions": 0}
-    r = client.post("/session", json={"rule": "the cat jumps onto the table"})
+    r = client.post("/session", json={"rules": ["the cat jumps onto the table"]})
     assert r.status_code == 201
-    assert (r.json()["predicate"], r.json()["direction"]) == (
-        "a cat is on the table",
-        "rising",
-    )
-    r = client.post("/session", json={"rule": "a cat"})
+    (w,) = r.json()["watches"]
+    assert (w["predicate"], w["direction"]) == ("a cat is on the table", "rising")
+    r = client.post("/session", json={"rules": ["the cat leaves", "a cat"]})
     assert (r.status_code, r.json()["error"]) == (400, "not_a_transition")
+    assert "'a cat'" in r.json()["hint"]
+    r = client.post("/session", json={"rules": ["", " "]})
+    assert (r.status_code, r.json()["error"]) == (400, "empty_rule")
+    r = client.post("/session", json={"rules": ["x happens"] * 6})
+    assert (r.status_code, r.json()["error"]) == (400, "too_many_rules")
     new_session(client)
-    r = client.post("/session", json={"rule": "x happens"})
+    r = client.post("/session", json={"rules": ["x happens"]})
     assert (r.status_code, r.json()["error"]) == (503, "full")
 
 
@@ -111,19 +117,21 @@ def test_frame_flow_fires_once(world):
 
     # The model answers in a background task, so each answer shows on the NEXT status.
     s = post_frame(client, sid, quiet).json()  # first frame: sent, baseline
-    assert (s["gate"], s["sent"], s["state"]) == ("first", True, None)
+    state = lambda s: s["watches"][0]["state"]  # noqa: E731
+    assert (s["gate"], s["sent"], state(s)) == ("first", True, None)
     s = post_frame(client, sid, quiet).json()  # same picture: skipped; baseline False
-    assert (s["gate"], s["sent"], s["state"]) == ("skip", False, False)
+    assert (s["gate"], s["sent"], state(s)) == ("skip", False, False)
     assert post_frame(client, sid, changed).json()["sent"] is True  # -> True: fires
     s = post_frame(client, sid, changed).json()
-    assert (s["fired"], s["state"], s["events"]) == (True, True, 1)
+    assert (s["fired"], state(s), s["events"]) == (True, True, 1)
     s = post_frame(client, sid, changed).json()  # == anchor: skip; fired reported once
     assert (s["gate"], s["fired"]) == ("skip", False)
     assert notifier.sent == ["a cat is on the table - became true"]
     assert perception.calls == 2
 
     view = client.get(f"/session/{sid}").json()
-    assert view["events"][0]["n"] == 0 and view["state"] is True
+    assert view["events"][0]["n"] == 0 and view["watches"][0]["state"] is True
+    assert view["events"][0]["rule"] == "the cat jumps onto the table"
     img = client.get(f"/session/{sid}/events/0.jpg")
     assert img.status_code == 200 and img.headers["content-type"] == "image/jpeg"
     ev = client.get(f"/session/{sid}/events/0").json()
@@ -154,7 +162,8 @@ def test_subscribe_before_any_watch_then_link(bot_world):
 
     # A watch started afterwards inherits the binding - no second scan.
     sid = client.post(
-        "/session", json={"rule": "the cat jumps onto the table", "subscriber": token}
+        "/session",
+        json={"rules": ["the cat jumps onto the table"], "subscriber": token},
     ).json()["session_id"]
     assert store.get(sid).subscriber == token
     assert client.get(f"/session/{sid}").json()["telegram"] is True
@@ -167,7 +176,8 @@ def test_unknown_subscriber_is_404(bot_world):
     assert client.get("/subscriber/nope/qr.svg").status_code == 404
     # An unknown token on /session is ignored rather than rejected: the watch still runs.
     sid = client.post(
-        "/session", json={"rule": "the cat jumps onto the table", "subscriber": "nope"}
+        "/session",
+        json={"rules": ["the cat jumps onto the table"], "subscriber": "nope"},
     ).json()["session_id"]
     assert store.get(sid).subscriber is None
     assert client.get(f"/session/{sid}").json()["telegram"] is False
@@ -239,19 +249,21 @@ async def test_capacity_reserved_before_normalizing_and_released_on_failure():
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        first = asyncio.create_task(client.post("/session", json={"rule": "arrives"}))
+        first = asyncio.create_task(
+            client.post("/session", json={"rules": ["arrives"]})
+        )
         await entered.wait()
         assert (
-            await client.post("/session", json={"rule": "arrives"})
+            await client.post("/session", json={"rules": ["arrives"]})
         ).status_code == 503
         assert calls == 1
         release.set()
         assert (await first).status_code == 502
         assert (
-            await client.post("/session", json={"rule": "arrives"})
+            await client.post("/session", json={"rules": ["arrives"]})
         ).status_code == 201
         assert (
-            await client.post("/session", json={"rule": "arrives"})
+            await client.post("/session", json={"rules": ["arrives"]})
         ).status_code == 503
         assert calls == 2
 
@@ -260,7 +272,7 @@ async def test_lifespan_expires_sessions_without_requests():
     import asyncio
 
     store = SessionStore(1, 30)
-    s = store.create("arrives", Rule("present", "rising", True))
+    s = store.create(["arrives"], [Rule("present", "rising", True)])
     app = create_app(FakePerception(), store, Notifier())
     async with app.router.lifespan_context(app):
         s.last_seen = 0
@@ -277,7 +289,7 @@ async def test_sse_delivers_result_without_another_frame_and_closes_on_delete():
     store = SessionStore(1, 30)
     perception = FakePerception()
     perception.answers = [True]
-    s = store.create("arrives", Rule("present", "rising", True))
+    s = store.create(["arrives"], [Rule("present", "rising", True)])
     app = create_app(perception, store, Notifier())
     endpoint = next(
         r.endpoint
@@ -287,12 +299,13 @@ async def test_sse_delivers_result_without_another_frame_and_closes_on_delete():
     response = await endpoint(s.id)
     stream = response.body_iterator
     assert response.media_type == "text/event-stream"
-    assert json.loads((await anext(stream)).removeprefix("data: "))["state"] is None
+    first = json.loads((await anext(stream)).removeprefix("data: "))
+    assert first["watches"][0]["state"] is None
     pending = asyncio.create_task(anext(stream))
     await handle_frame(s, jpeg("1.png"), perception, Notifier())
     await s.task
     status = json.loads((await asyncio.wait_for(pending, 1)).removeprefix("data: "))
-    assert status["state"] is True and status["events"] == 1
+    assert status["watches"][0]["state"] is True and status["events"] == 1
     assert status["revision"] == 1
     pending = asyncio.create_task(anext(stream))
     store.delete(s.id)
@@ -306,7 +319,7 @@ async def test_open_updates_stream_keeps_a_paused_session_alive():
     import time
 
     store = SessionStore(1, 30)
-    s = store.create("arrives", Rule("present", "rising", True))
+    s = store.create(["arrives"], [Rule("present", "rising", True)])
     app = create_app(FakePerception(), store, Notifier())
     endpoint = next(
         r.endpoint

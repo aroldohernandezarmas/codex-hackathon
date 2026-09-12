@@ -1,4 +1,4 @@
-"""In-memory sessions: one gate + one tracker per browser tab, capped, expiring on silence."""
+"""In-memory sessions: one gate + N watches (one tracker each) per browser tab, capped, expiring on silence."""
 
 import asyncio
 import secrets
@@ -23,12 +23,13 @@ class Event:
     at: str  # ISO-8601 UTC
     text: str
     image: bytes
+    rule: str = ""  # the user's words for the watch that fired
 
 
-@dataclass
+@dataclass(eq=False)  # identity: a replaced watch with the same words is a new watch
 class Watch:
-    """One rule the user is waiting for. A session has one today; the engine loops
-    over watches, so N rules per camera is a list here plus one prompt change."""
+    """One rule the user is waiting for. A session holds several; one model call per
+    frame answers all of them."""
 
     rule: str
     predicate: str
@@ -36,7 +37,10 @@ class Watch:
     tracker: Tracker
     evidence: str = ""
     fired: bool = False  # an event fired, not yet reported in a FrameStatus
-    events: list[Event] = field(default_factory=list)
+
+
+def new_watch(rule: str, spec: Rule) -> Watch:
+    return Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction))
 
 
 @dataclass
@@ -49,7 +53,7 @@ class Subscriber:
     token: str
     chat_id: Optional[int] = None  # Telegram chat bound via /start <token>
     muted: bool = False
-    editing_rule: bool = False
+    editing: Optional[str] = None  # rule entry in progress: "add" | "edit:<index>"
     last_seen: float = field(default_factory=time.monotonic)
 
 
@@ -57,7 +61,8 @@ class Subscriber:
 class Session:
     id: str
     gate: Gate
-    watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
+    watches: list[Watch]
+    events: list[Event] = field(default_factory=list)  # across all watches, in order
     busy: bool = False  # a model call is in flight
     subscriber: Optional[str] = None  # Subscriber.token to notify when an event fires
     latest_frame: bytes = b""
@@ -86,17 +91,18 @@ class SessionStore:
         self.sweep()
         return len(self._sessions)
 
-    def create(self, rule: str, spec: Rule) -> Session:
+    def create(self, rules: list[str], specs: list[Rule]) -> Session:
         self.sweep()
         if len(self._sessions) >= self.max_sessions:
             raise SessionFull()
         session = Session(
             secrets.token_urlsafe(6),
             Gate(),
-            Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction)),
+            [new_watch(rule, spec) for rule, spec in zip(rules, specs)],
         )
-        session.usage += spec.usage  # the normalize call is billed to this session
-        logger.info("session={} usage +{} (normalize)", session.id, spec.usage)
+        for spec in specs:  # the normalize calls are billed to this session
+            session.usage += spec.usage
+        logger.info("session={} usage {} (normalize)", session.id, session.usage)
         self._sessions[session.id] = session
         return session
 

@@ -18,23 +18,30 @@ from src.server.notifier import Notifier
 from src.server.session import Event, Session, Watch
 
 
-def detection_status(session: Session) -> dict:
-    w = session.watch
+def watch_status(w: Watch) -> dict:
     return {
-        "revision": session.revision,
         "rule": w.rule,
         "predicate": w.predicate,
         "direction": w.direction,
         "state": w.tracker.state,
         "evidence": w.evidence,
-        "events": len(w.events),
+    }
+
+
+def detection_status(session: Session) -> dict:
+    return {
+        "revision": session.revision,
+        "watches": [watch_status(w) for w in session.watches],
+        "events": len(session.events),
+        "last_event": session.events[-1].text if session.events else None,
         "usage": session.usage.as_dict(),
     }
 
 
 def _status(session: Session, gate: GateResult, sent: bool) -> dict:
-    w = session.watch
-    fired, w.fired = w.fired, False  # reported once, on the next status
+    fired = any(w.fired for w in session.watches)
+    for w in session.watches:
+        w.fired = False  # reported once, on the next status
     return {
         "gate": gate.verdict,
         "streak": gate.streak,
@@ -79,8 +86,6 @@ async def perceive(
 ) -> None:
     """Background: ask the model, update the tracker, fire the edge. Never raises."""
     try:
-        # ponytail: one predicate per call; for several watches ask them all in one
-        # prompt (JSON list) rather than N round-trips
         await _observe(session, jpeg, perception, notifier)
     finally:
         session.busy = False
@@ -100,38 +105,44 @@ async def _notify(
 async def _observe(
     session: Session, jpeg: bytes, perception: Perception, notifier: Notifier
 ) -> None:
-    session_id, w = session.id, session.watch
+    session_id, watches = session.id, list(session.watches)  # snapshot: edits race
     try:
-        observation = await perception.detect(jpeg, w.predicate)
+        detection = await perception.detect(jpeg, [w.predicate for w in watches])
     except PerceptionError as e:
         session.retry = True
         logger.warning("session={} perception failed: {}", session_id, e)
         return
-    session.usage += observation.usage
+    session.usage += detection.usage
     logger.info(
-        "session={} usage +{} -> total {}", session_id, observation.usage, session.usage
+        "session={} usage +{} -> total {}", session_id, detection.usage, session.usage
     )
-    if session.closed or session.watch is not w:
+    if session.closed:
         return
-    w.evidence = observation.evidence
-    fired = w.tracker.update(observation.state)
-    logger.info(
-        "session={} model={} evidence={!r} tracker[{}] fired={}",
-        session_id,
-        observation.state,
-        observation.evidence,
-        w.tracker,
-        fired,
-    )
-    if fired:
+    for w, observation in zip(watches, detection.observations):
+        if not any(w is live for live in session.watches):
+            continue  # replaced or dropped while the model was thinking
+        w.evidence = observation.evidence
+        fired = w.tracker.update(observation.state)
+        logger.info(
+            "session={} {!r} model={} evidence={!r} tracker[{}] fired={}",
+            session_id,
+            w.predicate,
+            observation.state,
+            observation.evidence,
+            w.tracker,
+            fired,
+        )
+        if not fired:
+            continue
         became = "true" if w.direction == "rising" else "false"
         event = Event(
-            len(w.events),
+            len(session.events),
             datetime.now(timezone.utc).isoformat(timespec="seconds"),
             f"{w.predicate} - became {became}",
             jpeg,
+            w.rule,
         )
-        w.events.append(event)
+        session.events.append(event)
         w.fired = True
         task = asyncio.create_task(_notify(notifier, session_id, replace(w), event))
         session.notifications.add(task)

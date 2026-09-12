@@ -1,4 +1,4 @@
-"""One question per call to a vision model. Port of notebooks/groq.ipynb, pointed at xAI.
+"""One call per frame to a vision model: every watch's predicate in one prompt. Port of notebooks/groq.ipynb, pointed at xAI.
 
 Integration seam: depend on the `Perception` protocol, not on `GrokPerception`.
 Tests inject a fake; the provider can be swapped without touching callers.
@@ -25,11 +25,12 @@ BASE_URL = "https://api.x.ai/v1"
 
 DETECT_PROMPT = (
     "You look at a single still frame from a fixed security camera.\n"
-    "Answer only this about THIS frame: is the following true right now?\n"
-    "  {predicate}\n"
+    "For EACH numbered statement answer only about THIS frame: is it true right now?\n"
+    "{predicates}\n"
     "If the frame is too dark or unclear to tell, answer false.\n"
-    'Reply with JSON only: {{"state_now": true|false, '
-    '"evidence": "<a few words on what you see>"}}'
+    'Reply with JSON only: {{"answers": [{{"state_now": true|false, '
+    '"evidence": "<a few words on what you see>"}}, ...]}} '
+    "- one object per statement, in the same order."
 )
 
 NORMALIZE_PROMPT = (
@@ -101,18 +102,26 @@ class Rule:
 class Observation:
     state: bool
     evidence: str
+
+
+@dataclass
+class Detection:
+    """One model call: an observation per predicate asked, in order."""
+
+    observations: list[Observation]
     usage: Usage = field(default_factory=Usage)
 
 
 class Perception(Protocol):
     async def normalize(self, rule: str) -> Rule: ...
 
-    async def detect(self, jpeg: bytes, predicate: str) -> Observation: ...
+    async def detect(self, jpeg: bytes, predicates: list[str]) -> Detection: ...
 
 
 def _json(raw: str) -> dict:
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
     except json.JSONDecodeError:
         found = re.search(r"\{.*\}", raw, re.S)
         if found:
@@ -135,19 +144,21 @@ class GrokPerception:
     async def aclose(self) -> None:
         await self.client.aclose()
 
-    async def _ask(self, content: Any) -> tuple[str, Usage]:
+    async def _ask(self, content: Any, max_tokens: int = 96) -> tuple[str, Usage]:
         try:
             return await asyncio.wait_for(
-                self._ask_with_failover(content), XAI_REQUEST_TIMEOUT
+                self._ask_with_failover(content, max_tokens), XAI_REQUEST_TIMEOUT
             )
         except asyncio.TimeoutError as e:
             raise PerceptionError("xAI request deadline exceeded") from e
 
-    async def _ask_with_failover(self, content: Any) -> tuple[str, Usage]:
+    async def _ask_with_failover(
+        self, content: Any, max_tokens: int
+    ) -> tuple[str, Usage]:
         payload = {
             "model": self.model,
             "temperature": 0,
-            "max_tokens": 96,
+            "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": content}],
         }
         last: Optional[Exception] = None
@@ -204,20 +215,34 @@ class GrokPerception:
             usage,
         )
 
-    async def detect(self, jpeg: bytes, predicate: str) -> Observation:
+    async def detect(self, jpeg: bytes, predicates: list[str]) -> Detection:
         image = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+        numbered = "\n".join(f"  {i + 1}. {p}" for i, p in enumerate(predicates))
         raw, usage = await self._ask(
             [
-                {"type": "text", "text": DETECT_PROMPT.format(predicate=predicate)},
+                {"type": "text", "text": DETECT_PROMPT.format(predicates=numbered)},
                 {"type": "image_url", "image_url": {"url": image}},
-            ]
+            ],
+            max_tokens=48 + 48 * len(predicates),
         )
-        data = _json(raw)
-        if "state_now" in data:
-            return Observation(
-                bool(data["state_now"]), str(data.get("evidence", "")), usage
-            )
-        found = re.findall(r"true|false", raw.lower())
-        if not found:
-            raise PerceptionError(f"no verdict in: {raw[:120]}")
-        return Observation(found[-1] == "true", "<unparsed>", usage)
+        return Detection(_answers(raw, len(predicates)), usage)
+
+
+def _answers(raw: str, n: int) -> list[Observation]:
+    data = _json(raw)
+    answers = data.get("answers")
+    if n == 1 and "state_now" in data:  # the model skipped the list for one question
+        answers = [data]
+    if (
+        isinstance(answers, list)
+        and len(answers) == n
+        and all(isinstance(a, dict) for a in answers)
+    ):
+        return [
+            Observation(bool(a.get("state_now")), str(a.get("evidence", "")))
+            for a in answers
+        ]
+    found = re.findall(r"true|false", raw.lower())
+    if len(found) != n:
+        raise PerceptionError(f"expected {n} verdicts in: {raw[:120]}")
+    return [Observation(v == "true", "<unparsed>") for v in found]

@@ -8,9 +8,10 @@ RULE = Rule("a cat is on the table", "rising", True)
 
 def test_create_and_get():
     store = SessionStore(max_sessions=2, ttl=30)
-    s = store.create("the cat jumps on the table", RULE)
+    s = store.create(["the cat jumps on the table"], [RULE])
     assert store.get(s.id) is s
-    assert (s.watch.predicate, s.watch.direction, s.watch.tracker.direction) == (
+    (w,) = s.watches
+    assert (w.predicate, w.direction, w.tracker.direction) == (
         RULE.predicate,
         "rising",
         "rising",
@@ -20,32 +21,32 @@ def test_create_and_get():
 
 def test_cap():
     store = SessionStore(max_sessions=2, ttl=30)
-    store.create("a", RULE)
-    store.create("b", RULE)
+    store.create(["a"], [RULE])
+    store.create(["b"], [RULE])
     with pytest.raises(SessionFull):
-        store.create("c", RULE)
+        store.create(["c"], [RULE])
 
 
 def test_ttl_frees_slot():
     store = SessionStore(max_sessions=1, ttl=30)
-    s = store.create("a", RULE)
+    s = store.create(["a"], [RULE])
     s.last_seen = 0.0
     assert store.sweep(now=31.0) == 1
     with pytest.raises(KeyError):
         store.get(s.id)
-    store.create("b", RULE)  # slot is free again
+    store.create(["b"], [RULE])  # slot is free again
 
 
 def test_create_sweeps_first():
     store = SessionStore(max_sessions=1, ttl=30)
-    s = store.create("a", RULE)
+    s = store.create(["a"], [RULE])
     s.last_seen = 0.0
-    store.create("b", RULE)  # would raise SessionFull without the sweep
+    store.create(["b"], [RULE])  # would raise SessionFull without the sweep
 
 
 def test_delete():
     store = SessionStore(max_sessions=1, ttl=30)
-    s = store.create("a", RULE)
+    s = store.create(["a"], [RULE])
     store.delete(s.id)
     assert len(store) == 0
     store.delete("missing")  # no error
@@ -54,7 +55,7 @@ def test_delete():
 def test_reads_expire_sessions_without_creating_another():
     for read in ("get", "all", "len"):
         store = SessionStore(1, 30)
-        s = store.create("a", RULE)
+        s = store.create(["a"], [RULE])
         s.last_seen = 0
         if read == "get":
             with pytest.raises(KeyError):
@@ -69,7 +70,7 @@ async def test_expiry_cancels_inflight_perception():
     import asyncio
 
     store = SessionStore(1, 30)
-    s = store.create("a", RULE)
+    s = store.create(["a"], [RULE])
     s.task = asyncio.create_task(asyncio.sleep(60))
     s.last_seen = 0
     store.sweep()

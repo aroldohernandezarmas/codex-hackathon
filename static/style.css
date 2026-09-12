@@ -45,10 +45,10 @@ body.flash { animation: flash .6s ease-out; }
 .rule { padding: 16px; }
 .rule label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
 .row { display: flex; gap: 8px; }
-input[type="text"] { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line);
-                     background: var(--bg); color: var(--text); font-size: 16px; }
-input[type="text"]:focus { outline: none; border-color: var(--accent); }
-input[type="text"]:disabled { color: var(--muted); }
+input[type="text"], textarea { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line);
+                     background: var(--bg); color: var(--text); font-size: 16px; font-family: inherit; resize: vertical; }
+input[type="text"]:focus, textarea:focus { outline: none; border-color: var(--accent); }
+input[type="text"]:disabled, textarea:disabled { color: var(--muted); }
 button { padding: 12px 18px; border-radius: 10px; border: 0; background: var(--accent); color: #241a05; font-weight: 700; font-size: 15px; cursor: pointer; }
 button.secondary { background: var(--line); color: var(--text); }
 button:disabled { opacity: .6; cursor: wait; }
@@ -56,7 +56,10 @@ button:disabled { opacity: .6; cursor: wait; }
 .usage span { display: flex; flex-direction: column; min-width: 56px; }
 .usage b { font-size: 15px; font-weight: 600; color: var(--text); }
 .usage small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
-.reading { margin: 10px 0 0; color: var(--accent); font-size: 14px; }
+.reading { margin: 10px 0 0; padding: 0; list-style: none; color: var(--accent); font-size: 14px; }
+.reading li { margin: 4px 0; }
+.reading li small { color: var(--muted); margin-left: 6px; }
+.reading li.true { color: var(--text); }
 .status { margin: 10px 0 0; color: var(--muted); min-height: 1.4em; }
 .status.error { color: var(--error); }
 .rule .slider { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
@@ -101,7 +104,7 @@ button:disabled { opacity: .6; cursor: wait; }
 
 @media (max-width: 480px) {
   .row { flex-direction: column; align-items: stretch; }
-  .row input[type="text"] { flex: none; width: 100%; }
+  .row input[type="text"], .row textarea { flex: none; width: 100%; }
   .row button { width: 100%; }
   .events li { grid-template-columns: 96px 1fr; }
 }

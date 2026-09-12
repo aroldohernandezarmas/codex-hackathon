@@ -22,6 +22,7 @@ XAI_PRICE_PROMPT = float(os.getenv("XAI_PRICE_PROMPT", "3.0"))
 XAI_PRICE_COMPLETION = float(os.getenv("XAI_PRICE_COMPLETION", "15.0"))
 MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "10"))
 SESSION_TTL = float(os.getenv("SESSION_TTL", "30"))
+MAX_WATCHES = int(os.getenv("MAX_WATCHES", "5"))  # rules per session
 MAX_SUBSCRIBERS = int(os.getenv("MAX_SUBSCRIBERS", "20"))
 SUBSCRIBER_TTL = float(os.getenv("SUBSCRIBER_TTL", "86400"))
 PORT = int(os.getenv("PORT", "8000"))

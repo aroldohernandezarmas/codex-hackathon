@@ -20,8 +20,35 @@ async def test_detect_parses_json():
     async def handler(request):
         return reply('{"state_now": true, "evidence": "cat on table"}')
 
-    obs = await make(handler).detect(b"jpegbytes", "a cat is on the table")
+    (obs,) = (
+        await make(handler).detect(b"jpegbytes", ["a cat is on the table"])
+    ).observations
     assert (obs.state, obs.evidence) == (True, "cat on table")
+
+
+async def test_detect_several_predicates_in_one_call():
+    prompts = []
+
+    async def handler(request):
+        prompts.append(request.content.decode())
+        return reply(
+            '{"answers": [{"state_now": true, "evidence": "cat"}, '
+            '{"state_now": false, "evidence": "door shut"}]}'
+        )
+
+    d = await make(handler).detect(b"jpeg", ["a cat is on the table", "door is open"])
+    assert [(o.state, o.evidence) for o in d.observations] == [
+        (True, "cat"),
+        (False, "door shut"),
+    ]
+    assert len(prompts) == 1 and "1. a cat is on the table" in prompts[0]
+    assert "2. door is open" in prompts[0]
+
+    async def short(request):
+        return reply("true")
+
+    with pytest.raises(PerceptionError):
+        await make(short).detect(b"jpeg", ["a", "b"])
 
 
 async def test_normalize_rule():
@@ -43,7 +70,7 @@ async def test_retry_on_429_then_error():
         return httpx.Response(429, json={"error": "slow down"})
 
     with pytest.raises(PerceptionError):
-        await make(handler).detect(b"x", "p")
+        await make(handler).detect(b"x", ["p"])
     assert seen == ["A", "B"]
 
 
@@ -58,8 +85,8 @@ async def test_failover_sticks_to_backup_key():
         return reply('{"state_now": false, "evidence": ""}')
 
     p = make(handler)
-    await p.detect(b"x", "p")
-    await p.detect(b"x", "p")  # stays on B, no retry through A
+    await p.detect(b"x", ["p"])
+    await p.detect(b"x", ["p"])  # stays on B, no retry through A
     assert seen == ["A", "B", "B"]
 
 
@@ -73,7 +100,7 @@ async def test_usage_is_read_from_response():
             },
         )
 
-    obs = await make(handler).detect(b"x", "p")
+    obs = await make(handler).detect(b"x", ["p"])
     assert obs.usage.as_dict() == {
         "prompt": 300,
         "completion": 12,
@@ -98,8 +125,8 @@ async def test_slow_key_fails_over_without_waiting_thirty_seconds(monkeypatch):
 
     p = make(handler)
     try:
-        result = await asyncio.wait_for(p.detect(b"jpeg", "present"), 1)
-        assert result.state and seen == ["A", "B"]
+        result = await asyncio.wait_for(p.detect(b"jpeg", ["present"]), 1)
+        assert result.observations[0].state and seen == ["A", "B"]
     finally:
         await p.aclose()
 
@@ -120,7 +147,7 @@ async def test_total_deadline_bounds_all_key_attempts(monkeypatch):
     p = make(handler)
     try:
         with pytest.raises(PerceptionError, match="deadline"):
-            await asyncio.wait_for(p.detect(b"jpeg", "present"), 1)
+            await asyncio.wait_for(p.detect(b"jpeg", ["present"]), 1)
         assert cancelled.is_set()
     finally:
         await p.aclose()

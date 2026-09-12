@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from src import config
 from src.server.cv.perception import GrokPerception, Perception, PerceptionError, Usage
-from src.server.engine import detection_status, handle_frame
+from src.server.engine import detection_status, handle_frame, watch_status
 from src.server.notifier import Notifier
 from src.server.session import Session, SessionFull, SessionStore, Subscribers
 from src.server.telegram.bot import Bot
@@ -25,7 +25,7 @@ STATIC = Path(__file__).resolve().parents[2] / "static"
 
 
 class NewSession(BaseModel):
-    rule: str
+    rules: list[str]  # one per watch, 1..MAX_WATCHES
     subscriber: Optional[str] = None  # token from POST /subscriber, if the page has one
 
 
@@ -84,9 +84,9 @@ def create_app(
 
     def event_or_404(session_id: str, n: int):
         s = session_or_404(session_id)
-        if n < 0 or n >= len(s.watch.events):
+        if n < 0 or n >= len(s.events):
             raise HTTPException(404, "no such event")
-        return s.watch.events[n]
+        return s.events[n]
 
     @app.get("/")
     async def index():
@@ -99,26 +99,35 @@ def create_app(
     @app.post("/session", status_code=201)
     async def create_session(body: NewSession):
         nonlocal pending_sessions
-        rule = body.rule.strip()
-        if not rule:
+        rules = [r.strip() for r in body.rules if r.strip()]
+        if not rules:
             return JSONResponse(
                 {"error": "empty_rule", "hint": "describe something that happens"},
+                status_code=400,
+            )
+        if len(rules) > config.MAX_WATCHES:
+            return JSONResponse(
+                {
+                    "error": "too_many_rules",
+                    "hint": f"at most {config.MAX_WATCHES} rules per camera",
+                },
                 status_code=400,
             )
         if len(store) + pending_sessions >= store.max_sessions:
             return JSONResponse({"error": "full"}, status_code=503)
         pending_sessions += 1
         try:
-            spec = await perception.normalize(rule)
-            if not spec.is_transition:
-                return JSONResponse(
-                    {
-                        "error": "not_a_transition",
-                        "hint": "describe something that happens - e.g. 'the cat jumps onto the table'",
-                    },
-                    status_code=400,
-                )
-            session = store.create(rule, spec)
+            specs = await asyncio.gather(*(perception.normalize(r) for r in rules))
+            for rule, spec in zip(rules, specs):
+                if not spec.is_transition:
+                    return JSONResponse(
+                        {
+                            "error": "not_a_transition",
+                            "hint": f"'{rule}': describe something that happens - e.g. 'the cat jumps onto the table'",
+                        },
+                        status_code=400,
+                    )
+            session = store.create(rules, list(specs))
         except PerceptionError as e:
             return JSONResponse(
                 {"error": "perception", "hint": str(e)}, status_code=502
@@ -129,11 +138,9 @@ def create_app(
             pending_sessions -= 1
         if body.subscriber and body.subscriber in subs:
             session.subscriber = body.subscriber
-        w = session.watch
         return {
             "session_id": session.id,
-            "predicate": w.predicate,
-            "direction": w.direction,
+            "watches": [watch_status(w) for w in session.watches],
             "telegram_link": (
                 bot.deep_link(session.subscriber)
                 if bot and session.subscriber
@@ -154,17 +161,14 @@ def create_app(
     @app.get("/session/{session_id}")
     async def view(session_id: str):
         s = session_or_404(session_id)
-        w = s.watch
         return {
             "session_id": s.id,
-            "rule": w.rule,
-            "predicate": w.predicate,
-            "direction": w.direction,
-            "state": w.tracker.state,
-            "evidence": w.evidence,
+            "watches": [watch_status(w) for w in s.watches],
             "telegram": _linked(s.subscriber),
             "usage": s.usage.as_dict(),
-            "events": [{"n": e.n, "at": e.at, "text": e.text} for e in w.events],
+            "events": [
+                {"n": e.n, "at": e.at, "text": e.text, "rule": e.rule} for e in s.events
+            ],
         }
 
     @app.post("/subscriber", status_code=201)
@@ -243,6 +247,7 @@ def create_app(
             "n": e.n,
             "at": e.at,
             "text": e.text,
+            "rule": e.rule,
             "image": "data:image/jpeg;base64," + base64.b64encode(e.image).decode(),
         }
 

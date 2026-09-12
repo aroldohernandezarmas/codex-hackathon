@@ -26,7 +26,7 @@ const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
 // the page is out of sight. The updates stream stays open, and that is what keeps the
 // server-side session alive across a pause of any length.
 const paused = () => document.visibilityState === 'hidden';
-let session = null;      // {session_id, predicate, direction}
+let session = null;      // {session_id, watches: [{rule, predicate, direction, state, evidence}]}
 let timer = null;        // setTimeout handle for the sampling loop
 let outstanding = 0;     // uploads currently in flight
 let uploadSeq = 0;       // increasing tag for each upload, to detect out-of-order responses
@@ -211,8 +211,10 @@ async function tick() {
   }
 }
 
-async function start(ruleText) {
-  if (startBtn.disabled) return;
+const rulesFromInput = () => rule.value.split('\n').map((s) => s.trim()).filter(Boolean);
+
+async function start(rules) {
+  if (startBtn.disabled || !rules.length) return;
   const attempt = ++generation;
   startBtn.disabled = true;
   if (!video.srcObject) {
@@ -225,11 +227,11 @@ async function start(ruleText) {
     }
   }
   if (attempt !== generation) return;
-  say('Understanding the rule…');
+  say(rules.length > 1 ? 'Understanding the rules…' : 'Understanding the rule…');
   try {
     const created = await api('/session', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rule: ruleText, subscriber: subscriber }),
+      body: JSON.stringify({ rules, subscriber: subscriber }),
     });
     if (attempt !== generation) {
       api(`/session/${created.session_id}`, { method: 'DELETE' }).catch(() => {});
@@ -248,8 +250,7 @@ async function start(ruleText) {
   lastRevision = -1; announcedEvents = 0;
   renderUsage(session.usage);
   startedAt = Date.now(); showElapsed(); clock = setInterval(showElapsed, 1000);
-  const arrow = session.direction === 'rising' ? 'becomes true' : 'becomes false';
-  reading.textContent = `Watching for: “${session.predicate}” → ${arrow}`;
+  renderWatches(session.watches);
   reading.hidden = false;
   events.innerHTML = ''; knownEvents = 0; evidence.textContent = '—';
   outstanding = 0; uploadSeq = 0; lastRenderedSeq = -1;
@@ -264,7 +265,7 @@ async function restart() {
   const deletion = stop(undefined, true);
   const attempt = generation;
   await deletion;
-  if (attempt === generation) await start(rule.value.trim());
+  if (attempt === generation) await start(rulesFromInput());
 }
 
 function stop(message, keepCamera = false) {
@@ -305,23 +306,40 @@ function connectUpdates() {
   });
 }
 
+// One line per watch: predicate, direction, and what the model last saw.
+function renderWatches(watches) {
+  reading.innerHTML = '';
+  for (const w of watches) {
+    const li = document.createElement('li');
+    li.className = w.state === true ? 'true' : '';
+    const arrow = w.direction === 'rising' ? 'becomes true' : 'becomes false';
+    li.textContent = `“${w.predicate}” → ${arrow}`;
+    const meta = document.createElement('small');
+    meta.textContent = (w.state === null || w.state === undefined ? 'unknown' : w.state ? 'TRUE' : 'false') + (w.evidence ? ` · ${w.evidence}` : '');
+    li.append(meta);
+    reading.append(li);
+  }
+}
+
 function renderDetection(s) {
   if (!session || (s.revision !== undefined && s.revision < lastRevision)) return;
   if (s.revision !== undefined) lastRevision = s.revision;
-  if (s.rule !== undefined) {
-    rule.value = s.rule;
-    session.predicate = s.predicate;
-    session.direction = s.direction;
-    const arrow = s.direction === 'rising' ? 'becomes true' : 'becomes false';
-    reading.textContent = `Watching for: “${s.predicate}” → ${arrow}`;
+  if (s.watches) {
+    session.watches = s.watches;
+    rule.value = s.watches.map((w) => w.rule).join('\n'); // Telegram may have edited the rules
+    renderWatches(s.watches);
+    const known = s.watches.filter((w) => w.state !== null);
+    const yes = known.filter((w) => w.state).length;
+    if (!known.length) setPill(statePill, 'unknown', 'idle');
+    else if (s.watches.length === 1) setPill(statePill, yes ? 'TRUE' : 'false', yes ? 'true' : 'false');
+    else setPill(statePill, `${yes}/${s.watches.length} true`, yes ? 'true' : 'false');
+    const seen = s.watches.map((w) => w.evidence).filter(Boolean);
+    evidence.textContent = seen.length ? seen.map((e) => `“${e}”`).join(' · ') : '—';
   }
-  if (s.state === null) setPill(statePill, 'unknown', 'idle');
-  else setPill(statePill, s.state ? 'TRUE' : 'false', s.state ? 'true' : 'false');
-  evidence.textContent = s.evidence ? `“${s.evidence}”` : '—';
   if (s.events > knownEvents) refreshEvents(s.events);
   if (s.events > announcedEvents) {
     announcedEvents = s.events;
-    flash(); showToast('Event! ' + session.predicate);
+    flash(); showToast('Event! ' + (s.last_event || ''));
   }
   if (s.usage) renderUsage(s.usage);
 }
@@ -348,7 +366,7 @@ async function refreshEvents(count) {
       img.alt = e.text;
       const cap = document.createElement('div');
       const b = document.createElement('b');
-      b.textContent = e.text;
+      b.textContent = e.rule ? `${e.rule} — ${e.text}` : e.text;
       const time = document.createElement('time');
       time.textContent = new Date(e.at).toLocaleTimeString();
       cap.append(b, time);
@@ -368,7 +386,8 @@ let toastTimer;
 function showToast(text) { toast.textContent = text; toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (toast.hidden = true), 4000); }
 
 // ---------- wiring ----------
-form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
+form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rulesFromInput()); });
+rule.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
 stopBtn.addEventListener('click', () => stop());
 restartBtn.addEventListener('click', restart);
 flip.addEventListener('click', flipCamera);

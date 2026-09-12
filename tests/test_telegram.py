@@ -57,9 +57,9 @@ async def test_deep_link_bind_status_stop():
     assert r.buttons and handle(store, subs, press("status")).text.startswith("📷")
 
     # The watch this browser starts later is picked up without a second scan.
-    s = store.create("the cat <jumps> onto the table", RULE)
+    s = store.create(["the cat <jumps> onto the table"], [RULE])
     s.subscriber = sub.token
-    s.watch.evidence = "cat on chair"
+    s.watches[0].evidence = "cat on chair"
     r = handle(store, subs, press("status"))
     assert (
         r.callback_id == "cb1"
@@ -81,20 +81,20 @@ async def test_notify_sends_photo_only_when_bound():
     bot = make_bot(calls)
     store = SessionStore(max_sessions=2, ttl=30)
     subs = Subscribers(max_subscribers=4, ttl=3600)
-    s = store.create("x happens", RULE)
+    s = store.create(["x happens"], [RULE])
     event = Event(
         0, "2026-09-12T14:32:10+00:00", "a cat is on the table - became true", b"jpg"
     )
     notifier = TelegramNotifier(bot, store, subs)
 
-    await notifier.notify(s.id, s.watch, event)
+    await notifier.notify(s.id, s.watches[0], event)
     assert calls == []  # no subscriber at all: log only
     sub = subs.create()
     s.subscriber = sub.token
-    await notifier.notify(s.id, s.watch, event)
+    await notifier.notify(s.id, s.watches[0], event)
     assert calls == []  # subscribed but no chat bound yet: still log only
     sub.chat_id = 42
-    await notifier.notify(s.id, s.watch, event)
+    await notifier.notify(s.id, s.watches[0], event)
     assert calls[0].url.path.endswith("/sendPhoto")
     body = calls[0].content
     assert (
@@ -110,7 +110,7 @@ def connected():
     subs = Subscribers(4, 3600)
     sub = subs.create()
     sub.chat_id = 42
-    session = store.create("cat arrives", RULE)
+    session = store.create(["cat arrives"], [RULE])
     session.subscriber = sub.token
     return store, subs, sub, session
 
@@ -161,31 +161,55 @@ async def test_pause_resume_keeps_connection_and_suppresses_only_alerts():
     notifier = TelegramNotifier(bot, store, subs)
     event = Event(0, "2026-09-12T14:32:10+00:00", "cat arrived", b"jpg")
     handle(store, subs, press("pause"))
-    await notifier.notify(session.id, session.watch, event)
+    await notifier.notify(session.id, session.watches[0], event)
     assert not calls and sub.chat_id == 42
     handle(store, subs, press("resume"))
-    await notifier.notify(session.id, session.watch, event)
+    await notifier.notify(session.id, session.watches[0], event)
     assert len(calls) == 1 and not sub.muted
     await bot.aclose()
 
 
-async def test_rule_update_preserves_session_history_and_signals_browser():
+async def test_rules_menu_add_edit_drop_preserves_history_and_signals_browser():
     from unittest.mock import AsyncMock
 
     from src.server.telegram.notifier import respond
 
     store, subs, sub, session = connected()
-    history = [Event(0, "2026-09-12T14:32:10+00:00", "cat arrived", b"jpg")]
-    session.watch.events = history
+    history = [Event(0, "2026-09-12T14:32:10+00:00", "cat arrived", b"jpg", "cat")]
+    session.events = history
     perception = AsyncMock()
     perception.normalize.return_value = Rule("door open", "rising", True)
-    handle(store, subs, press("rule"))
+    # Rules screen: one row of edit/drop per watch plus Add.
+    r = handle(store, subs, press("rules"))
+    assert r.buttons[0] == [
+        ("✏️ 01", f"edit:{session.id}:0"),
+        ("🗑 01", f"drop:{session.id}:0"),
+    ]
+    assert r.buttons[1] == [("➕ Add rule", "add")] and not sub.editing
+    # Add: the old watch keeps its state, the new one starts fresh.
+    session.watches[0].tracker.state = True
+    handle(store, subs, press("add"))
+    assert sub.editing == "add"
     await respond(AsyncMock(), store, subs, perception, msg("The door opens"))
-    assert session.watch.rule == "The door opens"
-    assert session.watch.events is history
-    assert session.watch.tracker.state is None
+    assert [w.rule for w in session.watches] == ["cat arrives", "The door opens"]
+    assert session.watches[0].tracker.state is True
+    assert session.watches[1].tracker.state is None
     assert session.retry and session.changed.is_set() and session.revision == 1
-    assert not sub.editing_rule
+    assert not sub.editing and session.events is history
+    # Edit replaces in place; the other watch is untouched.
+    handle(store, subs, press(f"edit:{session.id}:0"))
+    assert sub.editing == "edit:0"
+    await respond(AsyncMock(), store, subs, perception, msg("Cat leaves"))
+    assert [w.rule for w in session.watches] == ["Cat leaves", "The door opens"]
+    assert session.watches[0].tracker.state is None and session.revision == 2
+    # Drop: never below one rule.
+    handle(store, subs, press(f"drop:{session.id}:1"))
+    assert [w.rule for w in session.watches] == ["Cat leaves"] and session.revision == 3
+    assert (
+        "Keep at least one" in handle(store, subs, press(f"drop:{session.id}:0")).text
+    )
+    assert len(session.watches) == 1
+    assert handle(store, subs, press(f"edit:{session.id}:5")).text.startswith("⌛")
 
 
 async def test_invalid_rule_retry_and_cancel():
@@ -195,17 +219,18 @@ async def test_invalid_rule_retry_and_cancel():
     from src.server.telegram.notifier import respond
 
     store, subs, sub, session = connected()
-    old = session.watch
+    old = list(session.watches)
     perception, bot = AsyncMock(), AsyncMock()
     perception.normalize.return_value = Rule("cat", "rising", False)
-    await respond(bot, store, subs, perception, msg("/rule cat"))
-    assert session.watch is old and sub.editing_rule
+    handle(store, subs, press("add"))
+    await respond(bot, store, subs, perception, msg("cat"))
+    assert session.watches == old and sub.editing
     perception.normalize.side_effect = PerceptionError("unavailable")
     await respond(bot, store, subs, perception, msg("door opens"))
-    assert session.watch is old and sub.editing_rule
+    assert session.watches == old and sub.editing
     handle(store, subs, press("cancel"))
     await respond(bot, store, subs, perception, msg("door opens"))
-    assert perception.normalize.await_count == 2 and not sub.editing_rule
+    assert perception.normalize.await_count == 2 and not sub.editing
 
 
 async def test_menu_edits_existing_text_and_event_access_is_scoped():
@@ -214,7 +239,7 @@ async def test_menu_edits_existing_text_and_event_access_is_scoped():
     from src.server.telegram.notifier import respond
 
     store, subs, sub, session = connected()
-    session.watch.events.append(Event(0, "2026-09-12T14:32:10+00:00", "<cat>", b"jpg"))
+    session.events.append(Event(0, "2026-09-12T14:32:10+00:00", "<cat>", b"jpg"))
     bot = AsyncMock()
     update = press("menu")
     update["callback_query"]["message"].update(message_id=10, text="Dashboard")
@@ -238,7 +263,7 @@ async def test_group_cannot_bind_or_control_camera():
     update["message"]["chat"]["type"] = "group"
     handle(store, subs, update)
     assert sub.chat_id == 42
-    update = msg("/rule door opens")
+    update = msg("/rules door opens")
     update["message"]["chat"]["type"] = "group"
     perception = AsyncMock()
     await respond(AsyncMock(), store, subs, perception, update)
@@ -276,7 +301,7 @@ async def test_edit_message_handles_unchanged_screen_but_preserves_api_errors():
 
 def test_navigating_away_cancels_rule_entry():
     store, subs, sub, session = connected()
-    handle(store, subs, press("rule"))
-    assert sub.editing_rule
+    handle(store, subs, press("add"))
+    assert sub.editing
     handle(store, subs, press("events"))
-    assert not sub.editing_rule
+    assert not sub.editing
