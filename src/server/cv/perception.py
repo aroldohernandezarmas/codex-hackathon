@@ -148,8 +148,8 @@ class GrokPerception:
                 return body["choices"][0]["message"].get("content") or "", usage
             except httpx.HTTPError as e:
                 last = e
-                logger.warning("xai request failed: {}", e)
-        raise PerceptionError(str(last))
+                logger.warning("xai request failed: {!r}", e)
+        raise PerceptionError(f"{type(last).__name__}: {last}" if last else "no keys")
 
     async def normalize(self, rule: str) -> Rule:
         raw, usage = await self._ask(NORMALIZE_PROMPT.format(rule=rule))

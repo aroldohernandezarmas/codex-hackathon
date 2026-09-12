@@ -4,8 +4,13 @@
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
 const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
-const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state');
+const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
+const notify = $('notify'), qrLink = $('qrLink'), qrImg = $('qrImg');
+const qrFallback = $('qrFallback'), qrBadge = $('qrBadge'), qrHint = $('qrHint');
+
+const SUB_KEY = 'watcher.subscriber'; // the token survives reloads, so one scan is enough
+const SUB_POLL_MS = 5000;
 const usage = $('usage'), resetUsageBtn = $('resetUsage');
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
@@ -16,6 +21,7 @@ let outstanding = 0;     // uploads currently in flight
 let uploadSeq = 0;       // increasing tag for each upload, to detect out-of-order responses
 let lastRenderedSeq = -1;
 let knownEvents = 0;
+let facing = 'environment'; // which camera to ask for; survives stop/start
 
 // ---------- camera ----------
 function releaseCamera() {
@@ -26,7 +32,7 @@ function releaseCamera() {
 }
 
 async function openCamera() {
-  const constraints = { video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false };
+  const constraints = { video: { facingMode: { ideal: facing }, width: { ideal: 1280 } }, audio: false };
   try {
     video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (firstError) {
@@ -39,15 +45,117 @@ async function openCamera() {
   if (video.readyState < 1) { // HAVE_NOTHING — metadata hasn't loaded yet
     await new Promise((r) => (video.onloadedmetadata = r));
   }
+  // Selfie view is mirrored for the preview only — the uploaded JPEG keeps the true orientation.
+  video.classList.toggle('mirrored', facing === 'user');
   canvas.width = FRAME_WIDTH;
   canvas.height = Math.round((video.videoHeight / video.videoWidth) * FRAME_WIDTH);
-  setPill(gatePill, 'ready', 'idle');
-  say('Camera on. Describe what should happen, then press Watch.');
+  // While a session runs, render() owns the gate pill and the status line — a mid-watch
+  // flip reopens the camera and must not overwrite them.
+  if (!session) {
+    setPill(gatePill, 'ready', 'idle');
+    say('Camera on. Describe what should happen, then press Watch.');
+  }
+}
+
+// The flip button only makes sense with more than one camera. Device kinds are readable
+// without permission; we still call this after the first open so nothing is enumerated early.
+async function revealFlipIfMultiCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  flip.hidden = devices.filter((d) => d.kind === 'videoinput').length < 2;
+}
+
+async function flipCamera() {
+  if (flip.disabled) return; // a swap is already in flight
+  flip.disabled = true;
+  const previous = facing;
+  facing = facing === 'environment' ? 'user' : 'environment';
+  releaseCamera();
+  try {
+    await openCamera();
+  } catch (e) {
+    facing = previous; // the requested camera isn't available — go back to the one that worked
+    try {
+      await openCamera();
+    } catch (_) {
+      // both gone; the message below is the only thing left to say
+    }
+    say(`Could not switch camera: ${e.message}`, true);
+  } finally {
+    flip.disabled = false;
+  }
 }
 
 function grabJpeg() {
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
   return new Promise((r) => canvas.toBlob(r, 'image/jpeg', JPEG_QUALITY));
+}
+
+// ---------- telegram subscription ----------
+// The token is the binding code, and it outlives every watch - so the QR can be shown
+// before any rule exists, and one scan covers every watch this browser starts.
+let subscriber = null;
+
+async function subscribe() {
+  const saved = localStorage.getItem(SUB_KEY);
+  if (saved) {
+    try {
+      return await api(`/subscriber/${saved}`); // still known to this server?
+    } catch (e) {
+      if (e.status !== 404) throw e; // 404: expired, or a server restart wiped it
+    }
+  }
+  const fresh = await api('/subscriber', { method: 'POST' });
+  localStorage.setItem(SUB_KEY, fresh.token);
+  return fresh;
+}
+
+// The QR stays on screen whether or not the chat is linked - only the badge changes.
+// It is hidden in exactly one case: no bot is configured, so there is nothing to offer.
+function showSubscription(s) {
+  subscriber = s.token;
+  if (!s.telegram_link) {
+    notify.hidden = true;
+    return;
+  }
+  qrLink.href = s.telegram_link;
+  const src = `/subscriber/${s.token}/qr.svg`;
+  // A failed image is retried on the next poll; comparing against the token rather than
+  // the full src keeps a cache-busted retry from looping.
+  if (qrImg.dataset.token !== s.token || qrImg.dataset.failed === '1') {
+    qrImg.dataset.token = s.token;
+    delete qrImg.dataset.failed;
+    qrImg.src = qrImg.dataset.retry ? `${src}?r=${Date.now()}` : src;
+  }
+  setPill(qrBadge, s.linked ? '✓ linked' : 'not linked', s.linked ? 'true' : 'idle');
+  qrHint.textContent = s.linked
+    ? 'Events go to your Telegram chat.'
+    : 'Scan to get events in Telegram.';
+  notify.hidden = false;
+}
+
+// An unreachable QR must not leave a broken image on a white plate - fall back to a
+// plain link, which is what the phone running this page would tap anyway.
+qrImg.addEventListener('error', () => {
+  if (!qrImg.getAttribute('src')) return; // src cleared, not a real failure
+  qrImg.dataset.failed = '1';
+  qrImg.dataset.retry = '1';
+  qrImg.hidden = true;
+  qrFallback.hidden = false;
+});
+qrImg.addEventListener('load', () => {
+  qrImg.hidden = false;
+  qrFallback.hidden = true;
+  delete qrImg.dataset.retry;
+});
+
+async function watchSubscription() {
+  try {
+    showSubscription(await subscribe());
+  } catch (e) {
+    notify.hidden = true; // no channel to offer - the page still works without one
+  }
+  setTimeout(watchSubscription, SUB_POLL_MS);
 }
 
 // ---------- api ----------
@@ -65,6 +173,7 @@ async function tick() {
   timer = setTimeout(tick, Number(sample.value));
   if (!session) return;
   if (outstanding >= MAX_OUTSTANDING) return; // already at the concurrency cap — skip this sample
+  if (video.readyState < 2) return; // HAVE_CURRENT_DATA — mid camera swap, no frame to grab
   outstanding++;
   const mySeq = ++uploadSeq;
   try {
@@ -99,7 +208,8 @@ async function start(ruleText) {
   say('Understanding the rule…');
   try {
     session = await api('/session', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rule: ruleText }),
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rule: ruleText, subscriber: subscriber }),
     });
   } catch (e) {
     startBtn.disabled = false;
@@ -196,8 +306,15 @@ function showToast(text) { toast.textContent = text; toast.hidden = false; clear
 // ---------- wiring ----------
 form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
 stopBtn.addEventListener('click', () => stop());
+flip.addEventListener('click', flipCamera);
+function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
+sample.addEventListener('input', showSample);
+showSample();
 resetUsageBtn.addEventListener('click', resetUsage);
 sample.addEventListener('input', () => (sampleValue.textContent = (sample.value / 1000).toFixed(2).replace(/0$/, '')));
 window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
-openCamera().catch((e) => say(`Camera unavailable: ${e.message}. Use https:// or localhost.`, true));
+watchSubscription();
+openCamera()
+  .then(revealFlipIfMultiCamera)
+  .catch((e) => say(`Camera unavailable: ${e.message}. Use https:// or localhost.`, true));

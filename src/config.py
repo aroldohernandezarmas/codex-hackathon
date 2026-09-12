@@ -17,5 +17,7 @@ XAI_API_KEYS = [
 XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.20-0309-non-reasoning")
 MAX_SESSIONS = int(os.getenv("MAX_SESSIONS", "10"))
 SESSION_TTL = float(os.getenv("SESSION_TTL", "30"))
+MAX_SUBSCRIBERS = int(os.getenv("MAX_SUBSCRIBERS", "20"))
+SUBSCRIBER_TTL = float(os.getenv("SUBSCRIBER_TTL", "86400"))
 PORT = int(os.getenv("PORT", "8000"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

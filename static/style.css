@@ -16,7 +16,11 @@ body.flash { animation: flash .6s ease-out; }
 .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
 .viewfinder { position: relative; background: #000; aspect-ratio: 16 / 9; }
 .viewfinder video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.viewfinder video.mirrored { transform: scaleX(-1); }
 .hud { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.flip { position: absolute; top: 12px; right: 12px; width: 38px; height: 38px; padding: 0; font-size: 18px; line-height: 1;
+        border-radius: 999px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);
+        border: 1px solid rgba(255,255,255,.12); color: var(--text); }
 
 .pill { padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; letter-spacing: .3px;
         background: rgba(0,0,0,.55); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); color: var(--text); }
@@ -46,6 +50,31 @@ button:disabled { opacity: .6; cursor: wait; }
 .rule .slider { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
 .slider input { flex: 1; accent-color: var(--accent); }
 
+/* Telegram binding QR. Always on screen while a bot is configured, linked or not. */
+.notify { margin-top: 16px; padding: 16px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 16px; display: flex; flex-direction: column; align-items: center;
+          gap: 10px; text-align: center; }
+.notify h2 { margin: 0; font-size: 15px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+/* The plate is sized by the QR itself, so a failed image collapses to the fallback link
+   instead of leaving a big white square. No line-height:0 here - the fallback is text. */
+.qr { display: flex; align-items: center; justify-content: center; min-height: 40px;
+      background: #fff; padding: 8px; border-radius: 10px; text-decoration: none; }
+.qr img { display: block; width: 160px; height: 160px; }
+.qr img[hidden] { display: none; } /* the class rule above would beat the UA hidden rule */
+.qr-fallback { color: #1b4ed8; font-weight: 600; font-size: 14px; padding: 4px 8px; }
+.qr-hint { margin: 0; max-width: 30ch; color: var(--muted); font-size: 13px; }
+
+/* Beside the video once there is room for a 200px rail, stacked underneath below that.
+   The :has() guard keeps the rail from reserving an empty column when no bot is
+   configured and the panel never appears. */
+@media (min-width: 700px) {
+  .app:has(.notify:not([hidden])) { max-width: 960px; }
+  .workspace:has(.notify:not([hidden])) {
+    display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 16px; align-items: start;
+  }
+  .workspace:has(.notify:not([hidden])) .notify { margin-top: 0; position: sticky; top: 20px; }
+}
+
 .log { margin-top: 20px; }
 .log h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 1px; }
 .evidence { margin: 0 0 12px; font-style: italic; color: var(--text); }
@@ -59,7 +88,8 @@ button:disabled { opacity: .6; cursor: wait; }
          padding: 10px 16px; border-radius: 999px; font-weight: 700; box-shadow: 0 6px 24px rgba(0,0,0,.4); z-index: 10; }
 
 @media (max-width: 480px) {
-  .row { flex-wrap: wrap; }
-  button { flex: 1; }
+  .row { flex-direction: column; align-items: stretch; }
+  .row input[type="text"] { flex: none; width: 100%; }
+  .row button { width: 100%; }
   .events li { grid-template-columns: 96px 1fr; }
 }

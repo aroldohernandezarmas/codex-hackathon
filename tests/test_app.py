@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import cv2
+import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,8 @@ from fastapi.testclient import TestClient
 from src.server.app import create_app
 from src.server.cv.perception import Observation, Rule, Usage
 from src.server.notifier import Notifier
-from src.server.session import SessionStore
+from src.server.session import SessionStore, Subscribers
+from src.server.telegram.bot import Bot
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 
@@ -51,6 +53,29 @@ def world():
     perception, notifier = FakePerception(), SpyNotifier()
     app = create_app(perception, SessionStore(max_sessions=2, ttl=30), notifier)
     return TestClient(app), perception, notifier
+
+
+def fake_bot() -> Bot:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"username": "cam_bot"}})
+
+    bot = Bot("token")
+    bot.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.telegram.org/bottoken",
+    )
+    # TestClient is not used as a context manager here, so the lifespan - and with it
+    # get_me(), which normally fills this in - never runs.
+    bot.username = "cam_bot"
+    return bot
+
+
+@pytest.fixture
+def bot_world():
+    perception, store = FakePerception(), SessionStore(max_sessions=2, ttl=30)
+    subs = Subscribers(max_subscribers=4, ttl=3600)
+    app = create_app(perception, store, SpyNotifier(), fake_bot(), subs)
+    return TestClient(app), store, subs
 
 
 def post_frame(client, sid, data):
@@ -112,7 +137,47 @@ def test_frame_flow_fires_once(world):
     assert (ev["n"], ev["text"]) == (0, view["events"][0]["text"])
     assert ev["image"].startswith("data:image/jpeg;base64,")
     assert client.get(f"/session/{sid}/events/1").status_code == 404
-    assert client.get(f"/session/{sid}/qr.svg").status_code == 404  # no bot in tests
+    assert view["telegram"] is False  # nothing subscribed
+
+
+def test_subscribe_before_any_watch_then_link(bot_world):
+    """The page can offer a QR with no session running, and one scan covers later watches."""
+    client, store, subs = bot_world
+    r = client.post("/subscriber")
+    assert r.status_code == 201
+    sub = r.json()
+    token = sub["token"]
+    assert sub["telegram_link"] == f"https://t.me/cam_bot?start={token}"
+    assert sub["linked"] is False
+
+    qr = client.get(f"/subscriber/{token}/qr.svg")
+    assert (qr.status_code, qr.headers["content-type"]) == (200, "image/svg+xml")
+    assert qr.content.startswith(b"<?xml") and b"<path" in qr.content
+
+    # The page polls this; it is the only thing driving the QR's visibility.
+    assert client.get(f"/subscriber/{token}").json()["linked"] is False
+    subs.get(token).chat_id = 42  # what /start <token> does in the bot
+    assert client.get(f"/subscriber/{token}").json()["linked"] is True
+
+    # A watch started afterwards inherits the binding - no second scan.
+    sid = client.post(
+        "/session", json={"rule": "the cat jumps onto the table", "subscriber": token}
+    ).json()["session_id"]
+    assert store.get(sid).subscriber == token
+    assert client.get(f"/session/{sid}").json()["telegram"] is True
+
+
+def test_unknown_subscriber_is_404(bot_world):
+    """A token from a previous process must fail cleanly so the page makes a new one."""
+    client, store, _ = bot_world
+    assert client.get("/subscriber/nope").status_code == 404
+    assert client.get("/subscriber/nope/qr.svg").status_code == 404
+    # An unknown token on /session is ignored rather than rejected: the watch still runs.
+    sid = client.post(
+        "/session", json={"rule": "the cat jumps onto the table", "subscriber": "nope"}
+    ).json()["session_id"]
+    assert store.get(sid).subscriber is None
+    assert client.get(f"/session/{sid}").json()["telegram"] is False
 
 
 def test_errors_and_delete(world):
