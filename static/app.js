@@ -4,8 +4,10 @@
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
 const startBtn = $('start'), stopBtn = $('stop'), restartBtn = $('restart'), sample = $('sample'), sampleValue = $('sampleValue');
+const mic = $('mic');
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
+const shotDialog = $('shotDialog'), shotImg = $('shotImg'), shotCaption = $('shotCaption'), shotTime = $('shotTime');
 const notify = $('notify'), qrLink = $('qrLink'), qrImg = $('qrImg');
 const qrFallback = $('qrFallback'), qrBadge = $('qrBadge'), qrHint = $('qrHint');
 
@@ -343,16 +345,27 @@ async function refreshEvents(count) {
     events.innerHTML = '';
     for (const e of [...view.events].reverse()) {
       const li = document.createElement('li');
+      const src = `/session/${sid}/events/${e.n}.jpg`;
+      const at = new Date(e.at).toLocaleTimeString();
+      // The thumbnail is a button: the stored frame is 640px wide, so the dialog shows
+      // it several times larger than the list ever can.
+      const shot = document.createElement('button');
+      shot.type = 'button';
+      shot.className = 'shot';
+      shot.setAttribute('aria-label', `Open larger view: ${e.text}, ${at}`);
       const img = document.createElement('img');
-      img.src = `/session/${sid}/events/${e.n}.jpg`;
+      img.src = src;
       img.alt = e.text;
+      img.loading = 'lazy';
+      shot.append(img);
+      shot.addEventListener('click', () => openShot(src, e.text, at));
       const cap = document.createElement('div');
       const b = document.createElement('b');
       b.textContent = e.text;
       const time = document.createElement('time');
-      time.textContent = new Date(e.at).toLocaleTimeString();
+      time.textContent = at;
       cap.append(b, time);
-      li.append(img, cap);
+      li.append(shot, cap);
       events.append(li);
     }
     knownEvents = count;
@@ -360,6 +373,18 @@ async function refreshEvents(count) {
     // Leave knownEvents alone — the next status with more events retries the refresh.
   }
 }
+
+// Full-size snapshot in a native dialog: focus trap, Esc and focus restore come free.
+function openShot(src, text, at) {
+  shotImg.src = src;
+  shotImg.alt = text;
+  shotCaption.textContent = text;
+  shotTime.textContent = at;
+  shotDialog.showModal();
+}
+// Clicking the backdrop closes; clicks on the picture or caption do not bubble out to it.
+shotDialog.addEventListener('click', (ev) => { if (ev.target === shotDialog) shotDialog.close(); });
+shotDialog.addEventListener('close', () => { shotImg.removeAttribute('src'); });
 
 function setPill(el, text, tone) { el.textContent = text; el.className = `pill pill-${tone}`; }
 function say(text, isError) { status.textContent = text; status.classList.toggle('error', !!isError); }
@@ -385,6 +410,60 @@ document.addEventListener('visibilitychange', () => {
   tick();
 });
 window.addEventListener('pagehide', () => { if (updates) updates.close(); if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
+
+// ---------- dictation ----------
+// Browser-native speech-to-text for the rule box. No backend, no upload. Where the API is
+// missing (Firefox), the button stays hidden and typing is the only path — no regression.
+(function setupDictation() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return; // unsupported — leave the mic button hidden
+  const recognition = new SR();
+  recognition.lang = navigator.language || 'en-US';
+  recognition.interimResults = true;
+  // Keep listening until the user taps off. Chrome's default (continuous=false) cuts out on
+  // the first pause, which reads as the mic "turning itself off" mid-sentence — not wanted.
+  recognition.continuous = true;
+  let listening = false;
+  let base = ''; // text already in the box when dictation started — new words append to it
+
+  function setListening(on) {
+    listening = on;
+    mic.classList.toggle('listening', on);
+    mic.setAttribute('aria-pressed', on ? 'true' : 'false');
+    mic.title = on ? 'Stop dictation' : 'Dictate rule';
+  }
+
+  // continuous=true keeps finalized segments in e.results, so read the whole list, not just
+  // the latest chunk — otherwise earlier words vanish once a new segment finalizes.
+  recognition.addEventListener('result', (e) => {
+    let text = '';
+    for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+    rule.value = (base + text).trimStart();
+  });
+  recognition.addEventListener('error', (e) => {
+    setListening(false);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') say('Microphone blocked — allow it or type the rule.', true);
+    else if (e.error !== 'aborted' && e.error !== 'no-speech') say(`Dictation error: ${e.error}`, true);
+  });
+  // Whatever ends the run — user tap, silence timeout, network — the button returns to idle.
+  recognition.addEventListener('end', () => setListening(false));
+
+  mic.addEventListener('click', () => {
+    if (rule.disabled) return; // a watch is running — the rule is locked
+    if (listening) {
+      // abort() stops immediately; stop() lingers waiting for a final result, which is what
+      // made "off" feel unresponsive. The interim text is already in the box, so nothing lost.
+      setListening(false);
+      recognition.abort();
+      return;
+    }
+    base = rule.value ? rule.value.trimEnd() + ' ' : '';
+    try { recognition.start(); setListening(true); }
+    catch (_) { /* already starting — ignore the double click */ }
+  });
+
+  mic.hidden = false;
+})();
 
 watchSubscription();
 openCamera()
