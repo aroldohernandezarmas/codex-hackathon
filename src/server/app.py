@@ -122,6 +122,13 @@ def create_app(
             "events": [{"n": e.n, "at": e.at, "text": e.text} for e in w.events],
         }
 
+    @app.get("/session/{session_id}/qr.svg")
+    async def qr(session_id: str):
+        session = session_or_404(session_id)
+        if bot is None:
+            raise HTTPException(404, "no telegram bot configured")
+        return Response(bot.qr_svg(session.id), media_type="image/svg+xml")
+
     @app.get(
         "/session/{session_id}/events/{n}.jpg"
     )  # before /{n}: "0.jpg" is not an int

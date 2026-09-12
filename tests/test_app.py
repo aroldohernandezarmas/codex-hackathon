@@ -111,6 +111,7 @@ def test_frame_flow_fires_once(world):
     assert (ev["n"], ev["text"]) == (0, view["events"][0]["text"])
     assert ev["image"].startswith("data:image/jpeg;base64,")
     assert client.get(f"/session/{sid}/events/1").status_code == 404
+    assert client.get(f"/session/{sid}/qr.svg").status_code == 404  # no bot in tests
 
 
 def test_errors_and_delete(world):

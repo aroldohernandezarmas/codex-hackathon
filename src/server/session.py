@@ -72,6 +72,9 @@ class SessionStore:
         self._sessions[session.id] = session
         return session
 
+    def all(self) -> list[Session]:
+        return list(self._sessions.values())
+
     def get(self, session_id: str) -> Session:
         return self._sessions[session_id]
 
