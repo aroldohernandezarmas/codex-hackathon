@@ -16,11 +16,18 @@
     <p class="tagline">Point the camera. Say what should happen. Get told when it does.</p>
     <details class="primer" open>
       <summary>How it works</summary>
-      <p>Describe what you want to catch in plain words and hit <b>Watch</b>. Watcher samples a
-        frame every 1&ndash;10&nbsp;seconds &mdash; your slider &mdash; checks it against your rules,
-        and logs the moment it matches, with a snapshot. Scan the QR code to get the same alerts on
-        your phone through Telegram. The counters show elapsed time, tokens used and what the
-        session has cost so far.</p>
+      <ol class="steps">
+        <li><b>Say what should happen.</b> In plain words: <i>the cat jumps onto the table</i>,
+          <i>someone opens the door</i>. Press <b>+ Add</b> for each rule &mdash; up to five run at once,
+          and you can add or remove them while watching.</li>
+        <li><b>Press Watch.</b> Every 1&ndash;10&nbsp;seconds (your slider) a frame goes to a vision model
+          that answers all your rules in one go. Quiet frames are skipped before they cost anything.</li>
+        <li><b>Get the moment.</b> When a rule flips &mdash; the cat <i>appears</i>, the door <i>opens</i> &mdash;
+          it lands below with a snapshot. Scan the QR code and the same alert reaches your phone in Telegram,
+          where you can also take a snapshot or edit the rules.</li>
+      </ol>
+      <p class="note">The counters show elapsed time, tokens used and what the session has cost. Nothing
+        is stored: close the tab and the session is gone.</p>
     </details>
   </header>
 
