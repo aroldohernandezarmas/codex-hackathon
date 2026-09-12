@@ -8,6 +8,9 @@ python-dotenv = "^1.0.1"
 httpx = "^0.28.1"
 numpy = "^2.2"
 opencv-python-headless = "^5.0.0.93"
+fastapi = "^0.141.1"
+uvicorn = "^0.52.4"
+python-multipart = "^0.0.32"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

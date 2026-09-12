@@ -24,18 +24,26 @@ class Event:
 
 
 @dataclass
-class Session:
-    id: str
+class Watch:
+    """One rule the user is waiting for. A session has one today; the engine loops
+    over watches, so N rules per camera is a list here plus one prompt change."""
+
     rule: str
     predicate: str
     direction: str
-    gate: Gate
     tracker: Tracker
     evidence: str = ""
-    busy: bool = False  # a model call is in flight
     fired: bool = False  # an event fired, not yet reported in a FrameStatus
-    last_seen: float = field(default_factory=time.monotonic)
     events: list[Event] = field(default_factory=list)
+
+
+@dataclass
+class Session:
+    id: str
+    gate: Gate
+    watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
+    busy: bool = False  # a model call is in flight
+    last_seen: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(
         default_factory=asyncio.Lock
     )  # frames of one tab, in order
@@ -57,11 +65,8 @@ class SessionStore:
             raise SessionFull()
         session = Session(
             secrets.token_urlsafe(6),
-            rule,
-            spec.predicate,
-            spec.direction,
             Gate(),
-            Tracker(spec.direction),
+            Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction)),
         )
         self._sessions[session.id] = session
         return session

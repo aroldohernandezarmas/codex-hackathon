@@ -10,7 +10,7 @@ def test_create_and_get():
     store = SessionStore(max_sessions=2, ttl=30)
     s = store.create("the cat jumps on the table", RULE)
     assert store.get(s.id) is s
-    assert (s.predicate, s.direction, s.tracker.direction) == (
+    assert (s.watch.predicate, s.watch.direction, s.watch.tracker.direction) == (
         RULE.predicate,
         "rising",
         "rising",
