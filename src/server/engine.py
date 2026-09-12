@@ -22,6 +22,9 @@ def detection_status(session: Session) -> dict:
     w = session.watch
     return {
         "revision": session.revision,
+        "rule": w.rule,
+        "predicate": w.predicate,
+        "direction": w.direction,
         "state": w.tracker.state,
         "evidence": w.evidence,
         "events": len(w.events),
@@ -47,6 +50,9 @@ async def handle_frame(
 ) -> dict:
     async with session.lock:  # gate state is per-session and not thread-safe
         frame = await asyncio.to_thread(decode, jpeg)  # raises ValueError on junk
+        session.latest_frame = jpeg
+        session.frame_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        session.frame_received.set()
         gate = await asyncio.to_thread(session.gate.observe, frame, not session.busy)
         skip = (
             "busy" if session.busy else None if gate.send or session.retry else "gate"
@@ -105,6 +111,8 @@ async def _observe(
     logger.info(
         "session={} usage +{} -> total {}", session_id, observation.usage, session.usage
     )
+    if session.closed or session.watch is not w:
+        return
     w.evidence = observation.evidence
     fired = w.tracker.update(observation.state)
     logger.info(

@@ -49,7 +49,7 @@ def create_app(
         task = None
         if bot is not None:
             await bot.get_me()
-            task = asyncio.create_task(poll(bot, store, subs))
+            task = asyncio.create_task(poll(bot, store, subs, perception))
         sweeper = asyncio.create_task(expire_sessions())
         try:
             yield

@@ -100,3 +100,43 @@ async def test_slow_notification_does_not_block_detection_and_keeps_evidence():
     release.set()
     await asyncio.gather(*s.notifications)
     assert captions == ["answer 1"]
+
+
+async def test_latest_frame_updates_even_when_model_is_busy():
+    from unittest.mock import AsyncMock
+
+    s = SessionStore(1, 30).create("arrives", Rule("present", "rising", True))
+    s.busy = True
+    jpeg = image()
+    await handle_frame(s, jpeg, AsyncMock(), Notifier())
+    assert s.latest_frame == jpeg and s.frame_at and s.frame_received.is_set()
+    s.frame_received.clear()
+    with pytest.raises(ValueError):
+        await handle_frame(s, b"invalid", AsyncMock(), Notifier())
+    assert not s.frame_received.is_set() and s.latest_frame == jpeg
+
+
+async def test_old_detection_cannot_fire_after_rule_change():
+    from src.server.engine import perceive
+    from src.server.session import Watch
+    from src.server.tracker import Tracker
+
+    started, release = asyncio.Event(), asyncio.Event()
+
+    class SlowPerception:
+        async def detect(self, jpeg, predicate):
+            started.set()
+            await release.wait()
+            return Observation(True, "old scene")
+
+    s = SessionStore(1, 30).create("arrives", Rule("present", "rising", True))
+    old = s.watch
+    task = asyncio.create_task(perceive(s, b"jpg", SlowPerception(), Notifier()))
+    await started.wait()
+    s.watch = Watch(
+        "door opens", "door open", "rising", Tracker("rising"), events=old.events
+    )
+    release.set()
+    await task
+    assert not s.watch.events and not s.watch.evidence
+    assert s.watch.tracker.state is None

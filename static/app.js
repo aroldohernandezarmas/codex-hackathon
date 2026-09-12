@@ -303,6 +303,13 @@ function connectUpdates() {
 function renderDetection(s) {
   if (!session || (s.revision !== undefined && s.revision < lastRevision)) return;
   if (s.revision !== undefined) lastRevision = s.revision;
+  if (s.rule !== undefined) {
+    rule.value = s.rule;
+    session.predicate = s.predicate;
+    session.direction = s.direction;
+    const arrow = s.direction === 'rising' ? 'becomes true' : 'becomes false';
+    reading.textContent = `Watching for: “${s.predicate}” → ${arrow}`;
+  }
   if (s.state === null) setPill(statePill, 'unknown', 'idle');
   else setPill(statePill, s.state ? 'TRUE' : 'false', s.state ? 'true' : 'false');
   evidence.textContent = s.evidence ? `“${s.evidence}”` : '—';

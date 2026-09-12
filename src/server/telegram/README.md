@@ -1,13 +1,13 @@
 # Telegram notifier
 
 Delivers camera events to a user's phone as a photo with a caption, and lets the user
-check status or stop notifications from the chat. Two files, no framework: the Bot API
+take fresh snapshots, change rules, browse events and pause alerts from the chat. Two files, no framework: the Bot API
 is called directly over `httpx`.
 
 | File | What it holds |
 |---|---|
-| `bot.py` | `Bot` — thin Bot API client: `get_me`, `get_updates`, `send_message`, `send_photo`, `answer_callback`, `set_commands`, `deep_link`, `qr_svg` |
-| `notifier.py` | `TelegramNotifier` (sends the event), `handle()` (turns one update into a reply), `poll()` (background long-polling loop), message texts and buttons |
+| `bot.py` | `Bot` — thin Bot API client: `get_me`, `get_updates`, `send_message`, `send_photo`, `answer_callback`, `set_commands`, `deep_link`, `qr_svg`, `edit_message`, `chat_action` |
+| `notifier.py` | `TelegramNotifier` (sends the event), `handle()` (menus and state), `respond()` (snapshots, rule normalization and delivery), `poll()` (background long-polling loop), message texts and buttons |
 
 ## How binding works
 
@@ -20,8 +20,8 @@ exists. Nothing is stored between restarts.
    in `localStorage`, so one scan covers every later watch from that browser.
 2. The page shows the link as a QR code (`GET /subscriber/{token}/qr.svg`).
 3. The phone opens the bot; Telegram sends `/start <token>` to the bot.
-4. `poll()` receives it, `handle()` sets `subscriber.chat_id`, the bot replies "Linked"
-   with two inline buttons: **Status** and **Stop**.
+4. `poll()` receives it, `handle()` sets `subscriber.chat_id`, the bot opens the camera dashboard
+   with **Snapshot now**, **Change rule**, **Recent events** and alert controls.
 5. `POST /session` carries the token, so the new session records `session.subscriber`.
 6. When the engine fires an event, `TelegramNotifier.notify()` resolves
    session → subscriber → chat and sends the proof frame there. No chat bound → log only.
@@ -30,7 +30,7 @@ The page polls `GET /subscriber/{token}` every 5 s; that `linked` flag is the on
 driving whether the QR is on screen. It shows whenever the browser is not linked, and
 disappears once it is.
 
-One chat per subscriber. A second scan of the same QR replaces the first chat. A token
+One camera subscriber per private chat; linking another browser disconnects the previous binding. A second scan of the same QR replaces the first chat. A token
 the server no longer knows (expired, or a restart) 404s, and the page mints a new one.
 
 ## Setup
@@ -65,7 +65,7 @@ notifier = TelegramNotifier(bot, store, subs)    # store: SessionStore
 
 # at startup, inside the running event loop
 await bot.get_me()
-task = asyncio.create_task(poll(bot, store, subs))   # runs until cancelled
+task = asyncio.create_task(poll(bot, store, subs, perception))   # runs until cancelled
 
 # somewhere in the engine, when an event fires
 await notifier.notify(session.id, session.watch, event)
@@ -81,34 +81,68 @@ swap the implementation and nothing else moves.
 
 ## Chat commands
 
-| Command / button | Reply |
+| Command / button | Behavior |
 |---|---|
-| `/start` | welcome with the three steps |
-| `/start <token>` | binds the chat, "Linked" + buttons |
-| `/status`, **Status** | rule, whether it is true now, what the model saw, event count |
-| `/status` with no watch running | "Linked. Nothing is being watched yet" |
-| `/stop`, **Stop** | unbinds the chat |
+| `/start` | Welcome, or dashboard when connected |
+| `/start <token>` | Connect this browser and open its dashboard |
+| `/menu`, `/status`, **Dashboard** | Camera freshness, rule, observation, event count and alert state |
+| `/snapshot`, **Snapshot now** | Wait up to 8 seconds for a newly received, valid frame and send it as a photo |
+| `/rule`, **Change rule** | Ask for a new rule; `/rule The door opens` also works |
+| `/events`, **Recent events** | Latest five events with buttons to open their photos |
+| `/pause`, `/stop`, **Pause alerts** | Silence Telegram alerts while retaining the connection and recording events |
+| `/resume`, **Resume alerts** | Send future event alerts again; no replay of paused alerts |
+| `/help`, **How it works** | Explain controls and camera requirements |
+| **Disconnect** | Ask for confirmation before removing the chat binding |
 
-Unknown token → "That code is stale, reload and scan again". Not bound → "Open the
-page and scan its QR code". Messages are HTML; user text goes through `html.escape`.
+All interface copy is English. Text screens use HTML headings, block quotes and inline
+buttons. Navigation edits an existing text message; photos are separate cards with
+follow-up controls. Refreshing an unchanged screen is harmless. User/model text is
+escaped and truncated to keep messages within Telegram limits. Camera controls are
+restricted to private chats.
+
+### Fresh snapshots
+
+The browser must remain open and send frames for an active watch. Snapshot waits for
+a new validated frame after the request, independently of the motion gate and model
+calls. It never substitutes an old event photo. If no frame arrives within 8 seconds,
+the bot shows camera recovery instructions and a retry button. The timestamp is the
+server's UTC frame receipt time, not a hardware capture timestamp.
+
+### Changing the watch
+
+Normalization validates the replacement before applying it. Invalid rules and model
+errors leave the old watch active. The session and its event history are preserved,
+the tracker is reset, and the next available frame is analyzed using the new rule.
+In-flight results for the old watch cannot append events after replacement. The
+browser receives the new rule, predicate and direction through its existing SSE feed.
+Cancel or navigate away to leave rule-entry mode.
 
 ## Event message
 
 Photo = the frame that fired the event. Caption:
 
 ```
-🔔 <rule>
-<what the model saw>
-#<n> · HH:MM:SS UTC
-[👁 Status] [🔕 Stop]
+🔔 MOMENT DETECTED
+
+▎ The cat jumps onto the table
+A cat is standing on the table.
+
+Event 01 · 2026-09-12 · 14:32:10 UTC
+[📸 See now]      [🗂 Recent events]
+[🔕 Pause alerts] [Dashboard]
 ```
+
+History photos show their original event text, even after the rule changes. History
+buttons are scoped to the connected session so an old card cannot open another watch.
 
 ## Limits and upgrade paths
 
 - **Long-polling, one instance.** Telegram returns `409 Conflict` if two processes poll
   the same token (for example local dev and Render at once). Use a second bot for local
   work. If the service ever runs more than one process, replace `poll()` with a webhook:
-  `setWebhook` on startup and a `POST /telegram` route that feeds updates to `handle()`.
+  `setWebhook` on startup and a `POST /telegram` route that feeds updates to `respond()`.
+  Updates currently run sequentially; snapshot waits and rule normalization delay later
+  commands, while camera processing and event delivery remain independent.
 - **Binding lives in memory.** A server restart drops it and the user scans again;
   `SUBSCRIBER_TTL` (default 24 h, refreshed by the page's poll) drops idle ones.
   Persisting it means a real store keyed by the token.
@@ -120,7 +154,8 @@ Photo = the frame that fired the event. Caption:
 ## Tests
 
 `tests/test_telegram.py` — deep link and QR, bind-before-any-rule / status / stop through
-`handle()`, photo sent only when a chat is bound. `tests/test_app.py` covers the
+`handle()`, fresh-frame waits and timeout behavior, rule replacement and cancellation,
+message editing, history isolation, private-chat controls and pause/resume. `tests/test_app.py` covers the
 `/subscriber` routes. Bot API is mocked with `httpx.MockTransport`; no token needed.
 
 ```bash
