@@ -52,7 +52,7 @@ The agent is a loop: sense (gate) → perceive (LLM) → remember (per-session s
    `TelegramNotifier` (`src/server/telegram/`, active when `TELEGRAM_BOT_TOKEN` is set)
    also sends the proof frame as a photo with the event text as caption to the chat bound
    to the session. Binding: `POST /session` returns `telegram_link`
-   (`https://t.me/<bot>?start=<session_id>`); the page shows it as a QR code; the phone
+   (`https://t.me/<bot>?start=<session_id>`); the page shows it as a QR code (`GET /session/{id}/qr.svg`, or client-side); the phone
    opens the bot, which receives `/start <session_id>` and stores `chat_id` on the
    session. Updates arrive by long-polling in a background task (one instance; a
    webhook if that ever changes). Binding dies with the session.
@@ -72,6 +72,7 @@ new session.
 | `POST` | `/session` | JSON `{"rule": str}` | `201 {"session_id", "predicate", "direction", "telegram_link"}` (link is `null` without a bot) · `400 {"error": "not_a_transition", "hint": str}` · `503 {"error": "full"}` |
 | `POST` | `/session/{id}/frame` | multipart field `frame` (JPEG) | `200 FrameStatus` · `404` |
 | `GET` | `/session/{id}` | — | `200 SessionView` · `404` |
+| `GET` | `/session/{id}/qr.svg` | — | SVG QR of `telegram_link` · `404` (no session, or no bot) |
 | `GET` | `/session/{id}/events/{n}` | — | `200 EventView` (event + proof frame in one call) · `404` |
 | `GET` | `/session/{id}/events/{n}.jpg` | — | JPEG · `404` |
 | `DELETE` | `/session/{id}` | — | `204` |
