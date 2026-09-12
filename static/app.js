@@ -4,7 +4,7 @@
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
 const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
-const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state');
+const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
@@ -15,6 +15,7 @@ let outstanding = 0;     // uploads currently in flight
 let uploadSeq = 0;       // increasing tag for each upload, to detect out-of-order responses
 let lastRenderedSeq = -1;
 let knownEvents = 0;
+let facing = 'environment'; // which camera to ask for; survives stop/start
 
 // ---------- camera ----------
 function releaseCamera() {
@@ -25,7 +26,7 @@ function releaseCamera() {
 }
 
 async function openCamera() {
-  const constraints = { video: { facingMode: 'environment', width: { ideal: 1280 } }, audio: false };
+  const constraints = { video: { facingMode: { ideal: facing }, width: { ideal: 1280 } }, audio: false };
   try {
     video.srcObject = await navigator.mediaDevices.getUserMedia(constraints);
   } catch (firstError) {
@@ -38,10 +39,45 @@ async function openCamera() {
   if (video.readyState < 1) { // HAVE_NOTHING — metadata hasn't loaded yet
     await new Promise((r) => (video.onloadedmetadata = r));
   }
+  // Selfie view is mirrored for the preview only — the uploaded JPEG keeps the true orientation.
+  video.classList.toggle('mirrored', facing === 'user');
   canvas.width = FRAME_WIDTH;
   canvas.height = Math.round((video.videoHeight / video.videoWidth) * FRAME_WIDTH);
-  setPill(gatePill, 'ready', 'idle');
-  say('Camera on. Describe what should happen, then press Watch.');
+  // While a session runs, render() owns the gate pill and the status line — a mid-watch
+  // flip reopens the camera and must not overwrite them.
+  if (!session) {
+    setPill(gatePill, 'ready', 'idle');
+    say('Camera on. Describe what should happen, then press Watch.');
+  }
+}
+
+// The flip button only makes sense with more than one camera. Device kinds are readable
+// without permission; we still call this after the first open so nothing is enumerated early.
+async function revealFlipIfMultiCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  flip.hidden = devices.filter((d) => d.kind === 'videoinput').length < 2;
+}
+
+async function flipCamera() {
+  if (flip.disabled) return; // a swap is already in flight
+  flip.disabled = true;
+  const previous = facing;
+  facing = facing === 'environment' ? 'user' : 'environment';
+  releaseCamera();
+  try {
+    await openCamera();
+  } catch (e) {
+    facing = previous; // the requested camera isn't available — go back to the one that worked
+    try {
+      await openCamera();
+    } catch (_) {
+      // both gone; the message below is the only thing left to say
+    }
+    say(`Could not switch camera: ${e.message}`, true);
+  } finally {
+    flip.disabled = false;
+  }
 }
 
 function grabJpeg() {
@@ -64,6 +100,7 @@ async function tick() {
   timer = setTimeout(tick, Number(sample.value));
   if (!session) return;
   if (outstanding >= MAX_OUTSTANDING) return; // already at the concurrency cap — skip this sample
+  if (video.readyState < 2) return; // HAVE_CURRENT_DATA — mid camera swap, no frame to grab
   outstanding++;
   const mySeq = ++uploadSeq;
   try {
@@ -182,7 +219,12 @@ function showToast(text) { toast.textContent = text; toast.hidden = false; clear
 // ---------- wiring ----------
 form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
 stopBtn.addEventListener('click', () => stop());
-sample.addEventListener('input', () => (sampleValue.textContent = (sample.value / 1000).toFixed(2).replace(/0$/, '')));
+flip.addEventListener('click', flipCamera);
+function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
+sample.addEventListener('input', showSample);
+showSample();
 window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
-openCamera().catch((e) => say(`Camera unavailable: ${e.message}. Use https:// or localhost.`, true));
+openCamera()
+  .then(revealFlipIfMultiCamera)
+  .catch((e) => say(`Camera unavailable: ${e.message}. Use https:// or localhost.`, true));
