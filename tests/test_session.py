@@ -1,0 +1,51 @@
+import pytest
+
+from src.server.cv.perception import Rule
+from src.server.session import SessionFull, SessionStore
+
+RULE = Rule("a cat is on the table", "rising", True)
+
+
+def test_create_and_get():
+    store = SessionStore(max_sessions=2, ttl=30)
+    s = store.create("the cat jumps on the table", RULE)
+    assert store.get(s.id) is s
+    assert (s.watch.predicate, s.watch.direction, s.watch.tracker.direction) == (
+        RULE.predicate,
+        "rising",
+        "rising",
+    )
+    assert len(store) == 1
+
+
+def test_cap():
+    store = SessionStore(max_sessions=2, ttl=30)
+    store.create("a", RULE)
+    store.create("b", RULE)
+    with pytest.raises(SessionFull):
+        store.create("c", RULE)
+
+
+def test_ttl_frees_slot():
+    store = SessionStore(max_sessions=1, ttl=30)
+    s = store.create("a", RULE)
+    s.last_seen = 0.0
+    assert store.sweep(now=31.0) == 1
+    with pytest.raises(KeyError):
+        store.get(s.id)
+    store.create("b", RULE)  # slot is free again
+
+
+def test_create_sweeps_first():
+    store = SessionStore(max_sessions=1, ttl=30)
+    s = store.create("a", RULE)
+    s.last_seen = 0.0
+    store.create("b", RULE)  # would raise SessionFull without the sweep
+
+
+def test_delete():
+    store = SessionStore(max_sessions=1, ttl=30)
+    s = store.create("a", RULE)
+    store.delete(s.id)
+    assert len(store) == 0
+    store.delete("missing")  # no error
