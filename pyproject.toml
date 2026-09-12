@@ -6,6 +6,9 @@ python = "^3.10"
 loguru = "^0.7.2"
 python-dotenv = "^1.0.1"
 google-genai = "^2.22.0"
+httpx = "^0.28.1"
+numpy = "^2.2"
+opencv-python-headless = "^5.0.0.93"
 fastapi = "^0.141.1"
 uvicorn = "^0.52.4"
 python-multipart = "^0.0.32"
@@ -20,7 +23,11 @@ jupyterlab = "^4.6.3"
 jupyter-collaboration = "^5.0.3"
 pillow = "^12.3.0"
 opencv-python = "^5.0.0.93"
-jupyter-mcp-tools = "^0.1.7"
+pytest-asyncio = "^1.4.0"
+google-genai = "^2.23.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.black]
 line-length = 88
