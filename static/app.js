@@ -22,6 +22,10 @@ function showElapsed() {
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
 const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
+// Nobody is looking at a hidden tab, and every frame costs tokens — so the loop idles while
+// the page is out of sight. The updates stream stays open, and that is what keeps the
+// server-side session alive across a pause of any length.
+const paused = () => document.visibilityState === 'hidden';
 let session = null;      // {session_id, predicate, direction}
 let timer = null;        // setTimeout handle for the sampling loop
 let outstanding = 0;     // uploads currently in flight
@@ -179,6 +183,7 @@ async function tick() {
   // Scheduled first: cadence is wall-clock, independent of how long the upload takes.
   timer = setTimeout(tick, Number(sample.value));
   if (!session) return;
+  if (paused()) return; // tab hidden — no one to show a reading to, so don't pay for one
   if (outstanding >= MAX_OUTSTANDING) return; // already at the concurrency cap — skip this sample
   if (video.readyState < 2) return; // HAVE_CURRENT_DATA — mid camera swap, no frame to grab
   const currentSession = session;
@@ -370,6 +375,15 @@ flip.addEventListener('click', flipCamera);
 function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
 sample.addEventListener('input', showSample);
 showSample();
+document.addEventListener('visibilitychange', () => {
+  if (!session) return;
+  if (paused()) { setPill(gatePill, 'paused', 'idle'); say('Paused — tab hidden.'); return; }
+  say('Watching.');
+  // Hidden tabs have their timers throttled to about once a minute, so the pending one is
+  // no use for resuming promptly — drop it and sample right away.
+  clearTimeout(timer);
+  tick();
+});
 window.addEventListener('pagehide', () => { if (updates) updates.close(); if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
 watchSubscription();

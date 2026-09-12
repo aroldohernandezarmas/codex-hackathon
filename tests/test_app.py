@@ -298,3 +298,29 @@ async def test_sse_delivers_result_without_another_frame_and_closes_on_delete():
     store.delete(s.id)
     assert "event: expired" in await asyncio.wait_for(pending, 1)
     await stream.aclose()
+
+
+async def test_open_updates_stream_keeps_a_paused_session_alive():
+    """A hidden tab stops uploading frames; only the stream is left to say it is still there."""
+    import asyncio
+    import time
+
+    store = SessionStore(1, 30)
+    s = store.create("arrives", Rule("present", "rising", True))
+    app = create_app(FakePerception(), store, Notifier())
+    endpoint = next(
+        r.endpoint
+        for r in app.routes
+        if getattr(r, "path", "") == "/session/{session_id}/updates"
+    )
+    stream = (await endpoint(s.id)).body_iterator
+    await anext(stream)
+    s.last_seen -= (
+        store.ttl + 1
+    )  # a pause longer than the TTL, with no frames to touch it
+    assert time.monotonic() - s.last_seen > store.ttl
+    s.changed.set()  # skip the 15s keepalive wait; the next iteration is what touches
+    await asyncio.wait_for(anext(stream), 1)
+    assert store.sweep() == 0
+    assert s.id in store._sessions
+    await stream.aclose()
