@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src import config
-from src.server.cv.perception import GrokPerception, Perception, PerceptionError
+from src.server.cv.perception import GrokPerception, Perception, PerceptionError, Usage
 from src.server.engine import handle_frame
 from src.server.notifier import Notifier
 from src.server.session import Session, SessionFull, SessionStore, Subscribers
@@ -111,6 +111,8 @@ def create_app(
             "session_id": session.id,
             "predicate": w.predicate,
             "direction": w.direction,
+            "telegram_link": bot.deep_link(session.id) if bot else None,
+            "usage": session.usage.as_dict(),
         }
 
     @app.post("/session/{session_id}/frame")
@@ -133,7 +135,8 @@ def create_app(
             "direction": w.direction,
             "state": w.tracker.state,
             "evidence": w.evidence,
-            "telegram": _linked(s.subscriber),
+            "telegram": s.chat_id is not None,
+            "usage": s.usage.as_dict(),
             "events": [{"n": e.n, "at": e.at, "text": e.text} for e in w.events],
         }
 
@@ -155,6 +158,17 @@ def create_app(
             "telegram_link": bot.deep_link(s.token) if bot else None,
             "linked": s.chat_id is not None,
         }
+
+    @app.get("/session/{session_id}/usage")
+    async def usage(session_id: str):
+        return session_or_404(session_id).usage.as_dict()
+
+    @app.post("/session/{session_id}/usage/reset")
+    async def reset_usage(session_id: str):
+        session = session_or_404(session_id)
+        session.usage = Usage()
+        return session.usage.as_dict()
+
 
     @app.get("/subscriber/{token}/qr.svg")
     async def subscriber_qr(token: str):

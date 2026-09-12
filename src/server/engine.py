@@ -29,6 +29,7 @@ def _status(session: Session, gate: GateResult, sent: bool) -> dict:
         "evidence": w.evidence,
         "fired": fired,
         "events": len(w.events),
+        "usage": session.usage.as_dict(),
     }
 
 
@@ -54,19 +55,21 @@ async def perceive(
     try:
         # ponytail: one predicate per call; for several watches ask them all in one
         # prompt (JSON list) rather than N round-trips
-        await _observe(session.id, session.watch, jpeg, perception, notifier)
+        await _observe(session, jpeg, perception, notifier)
     finally:
         session.busy = False
 
 
 async def _observe(
-    session_id: str, w: Watch, jpeg: bytes, perception: Perception, notifier: Notifier
+    session: Session, jpeg: bytes, perception: Perception, notifier: Notifier
 ) -> None:
+    session_id, w = session.id, session.watch
     try:
         observation = await perception.detect(jpeg, w.predicate)
     except PerceptionError as e:
         logger.warning("session={} perception failed: {}", session_id, e)
         return
+    session.usage += observation.usage
     w.evidence = observation.evidence
     if w.tracker.update(observation.state):
         became = "true" if w.direction == "rising" else "false"
