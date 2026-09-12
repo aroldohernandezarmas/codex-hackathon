@@ -47,6 +47,22 @@ async def test_retry_on_429_then_error():
     assert seen == ["A", "B"]
 
 
+async def test_failover_sticks_to_backup_key():
+    seen = []
+
+    async def handler(request):
+        key = request.headers["authorization"][-1]
+        seen.append(key)
+        if key == "A":
+            return httpx.Response(401, json={"error": "bad key"})
+        return reply('{"state_now": false, "evidence": ""}')
+
+    p = make(handler)
+    await p.detect(b"x", "p")
+    await p.detect(b"x", "p")  # stays on B, no retry through A
+    assert seen == ["A", "B", "B"]
+
+
 async def test_usage_is_read_from_response():
     async def handler(request):
         return httpx.Response(
@@ -63,4 +79,48 @@ async def test_usage_is_read_from_response():
         "completion": 12,
         "total": 312,
         "calls": 1,
+        "usd": 0.00108,  # 300*$3 + 12*$15 per 1M
     }
+
+
+async def test_slow_key_fails_over_without_waiting_thirty_seconds(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr("src.server.cv.perception.XAI_ATTEMPT_TIMEOUT", 0.01)
+    seen = []
+
+    async def handler(request):
+        key = request.headers["authorization"][-1]
+        seen.append(key)
+        if key == "A":
+            await asyncio.sleep(60)
+        return reply('{"state_now": true}')
+
+    p = make(handler)
+    try:
+        result = await asyncio.wait_for(p.detect(b"jpeg", "present"), 1)
+        assert result.state and seen == ["A", "B"]
+    finally:
+        await p.aclose()
+
+
+async def test_total_deadline_bounds_all_key_attempts(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr("src.server.cv.perception.XAI_REQUEST_TIMEOUT", 0.02)
+    monkeypatch.setattr("src.server.cv.perception.XAI_ATTEMPT_TIMEOUT", 1)
+    cancelled = asyncio.Event()
+
+    async def handler(request):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            cancelled.set()
+
+    p = make(handler)
+    try:
+        with pytest.raises(PerceptionError, match="deadline"):
+            await asyncio.wait_for(p.detect(b"jpeg", "present"), 1)
+        assert cancelled.is_set()
+    finally:
+        await p.aclose()

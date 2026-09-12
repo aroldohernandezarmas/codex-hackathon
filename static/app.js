@@ -3,7 +3,7 @@
 
 const $ = (id) => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), form = $('ruleForm'), rule = $('rule');
-const startBtn = $('start'), stopBtn = $('stop'), sample = $('sample'), sampleValue = $('sampleValue');
+const startBtn = $('start'), stopBtn = $('stop'), restartBtn = $('restart'), sample = $('sample'), sampleValue = $('sampleValue');
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
 const notify = $('notify'), qrLink = $('qrLink'), qrImg = $('qrImg');
@@ -11,7 +11,14 @@ const qrFallback = $('qrFallback'), qrBadge = $('qrBadge'), qrHint = $('qrHint')
 
 const SUB_KEY = 'watcher.subscriber'; // the token survives reloads, so one scan is enough
 const SUB_POLL_MS = 5000;
-const usage = $('usage'), resetUsageBtn = $('resetUsage');
+const usage = $('usage'), cost = $('cost'), elapsed = $('elapsed');
+let generation = 0;
+let updates = null, lastRevision = -1, announcedEvents = 0;
+let startedAt = 0, clock = null;
+function showElapsed() {
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
 
 const FRAME_WIDTH = 640, JPEG_QUALITY = 0.8;
 const MAX_OUTSTANDING = 2; // at most this many uploads in flight at once
@@ -174,27 +181,34 @@ async function tick() {
   if (!session) return;
   if (outstanding >= MAX_OUTSTANDING) return; // already at the concurrency cap — skip this sample
   if (video.readyState < 2) return; // HAVE_CURRENT_DATA — mid camera swap, no frame to grab
+  const currentSession = session;
   outstanding++;
   const mySeq = ++uploadSeq;
   try {
     const fd = new FormData();
-    fd.append('frame', await grabJpeg(), 'frame.jpg');
-    const s = await api(`/session/${session.session_id}/frame`, { method: 'POST', body: fd });
+    const jpeg = await grabJpeg();
+    if (session !== currentSession) return;
+    fd.append('frame', jpeg, 'frame.jpg');
+    const s = await api(`/session/${currentSession.session_id}/frame`, { method: 'POST', body: fd });
     // Concurrent uploads can resolve out of order — drop a response older than
     // the newest one already rendered.
+    if (session !== currentSession) return;
     if (mySeq > lastRenderedSeq) {
       lastRenderedSeq = mySeq;
       render(s);
     }
   } catch (e) {
+    if (session !== currentSession) return;
     if (e.status === 404) { stop('Session expired — start again.'); return; }
     say(`Upload failed: ${e.message}`, true);
   } finally {
-    outstanding--;
+    if (session === currentSession) outstanding--;
   }
 }
 
 async function start(ruleText) {
+  if (startBtn.disabled) return;
+  const attempt = ++generation;
   startBtn.disabled = true;
   if (!video.srcObject) {
     try {
@@ -205,21 +219,30 @@ async function start(ruleText) {
       return;
     }
   }
+  if (attempt !== generation) return;
   say('Understanding the rule…');
   try {
-    session = await api('/session', {
+    const created = await api('/session', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ rule: ruleText, subscriber: subscriber }),
     });
+    if (attempt !== generation) {
+      api(`/session/${created.session_id}`, { method: 'DELETE' }).catch(() => {});
+      return;
+    }
+    session = created;
   } catch (e) {
+    if (attempt !== generation) return;
     startBtn.disabled = false;
     if (e.status === 503) { say('The room is full right now. Try again in a minute.', true); return; }
     say(e.message, true);
     return;
   }
   startBtn.disabled = false;
-  startBtn.hidden = true; stopBtn.hidden = false; rule.disabled = true;
-  resetUsageBtn.hidden = false; renderUsage(session.usage);
+  startBtn.hidden = true; stopBtn.hidden = false; restartBtn.hidden = false; rule.disabled = true;
+  lastRevision = -1; announcedEvents = 0;
+  renderUsage(session.usage);
+  startedAt = Date.now(); showElapsed(); clock = setInterval(showElapsed, 1000);
   const arrow = session.direction === 'rising' ? 'becomes true' : 'becomes false';
   reading.textContent = `Watching for: “${session.predicate}” → ${arrow}`;
   reading.hidden = false;
@@ -227,18 +250,32 @@ async function start(ruleText) {
   outstanding = 0; uploadSeq = 0; lastRenderedSeq = -1;
   setPill(statePill, 'unknown', 'idle');
   say('Watching.');
+  connectUpdates();
   tick();
 }
 
-function stop(message) {
+async function restart() {
+  if (!session) return;
+  const deletion = stop(undefined, true);
+  const attempt = generation;
+  await deletion;
+  if (attempt === generation) await start(rule.value.trim());
+}
+
+function stop(message, keepCamera = false) {
+  generation++;
+  if (updates) { updates.close(); updates = null; }
   clearTimeout(timer); timer = null;
-  if (session) api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {});
+  const deletion = session ? api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {}) : Promise.resolve();
   session = null;
-  releaseCamera();
-  startBtn.hidden = false; stopBtn.hidden = true; rule.disabled = false;
-  reading.hidden = true; resetUsageBtn.hidden = true;
-  setPill(gatePill, 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
+  if (!keepCamera) releaseCamera();
+  startBtn.disabled = false;
+  startBtn.hidden = false; stopBtn.hidden = true; restartBtn.hidden = true; rule.disabled = false;
+  reading.hidden = true;
+  clearInterval(clock); clock = null;
+  setPill(gatePill, keepCamera ? 'ready' : 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
   say(message || 'Stopped.');
+  return deletion;
 }
 
 // ---------- render ----------
@@ -249,23 +286,38 @@ function render(s) {
   if (!session) return; // response arrived after Stop cleared the session — nothing to render
   const label = s.sent ? 'asking the model' : s.busy ? 'model busy' : GATE_LABEL[s.gate] + (s.streak ? ` ×${s.streak}` : '');
   setPill(gatePill, label, s.sent ? 'send' : GATE_TONE[s.gate]);
+  renderDetection(s);
+}
+
+function connectUpdates() {
+  const currentSession = session;
+  updates = new EventSource(`/session/${session.session_id}/updates`);
+  updates.onmessage = (event) => {
+    if (session === currentSession) renderDetection(JSON.parse(event.data));
+  };
+  updates.addEventListener('expired', () => {
+    if (session === currentSession) stop('Session expired — start again.');
+  });
+}
+
+function renderDetection(s) {
+  if (!session || (s.revision !== undefined && s.revision < lastRevision)) return;
+  if (s.revision !== undefined) lastRevision = s.revision;
   if (s.state === null) setPill(statePill, 'unknown', 'idle');
   else setPill(statePill, s.state ? 'TRUE' : 'false', s.state ? 'true' : 'false');
-  if (s.evidence) evidence.textContent = `“${s.evidence}”`;
+  evidence.textContent = s.evidence ? `“${s.evidence}”` : '—';
   if (s.events > knownEvents) refreshEvents(s.events);
-  if (s.fired) { flash(); showToast('Event! ' + session.predicate); }
+  if (s.events > announcedEvents) {
+    announcedEvents = s.events;
+    flash(); showToast('Event! ' + session.predicate);
+  }
   if (s.usage) renderUsage(s.usage);
 }
 
 function renderUsage(u) {
-  usage.textContent = `${u.total} (${u.prompt} in / ${u.completion} out, ${u.calls} calls)`;
-  usage.title = 'API tokens spent by this session';
-}
-
-async function resetUsage() {
-  if (!session) return;
-  try { renderUsage(await api(`/session/${session.session_id}/usage/reset`, { method: 'POST' })); }
-  catch (e) { say(`Reset failed: ${e.message}`, true); }
+  usage.textContent = u.total.toLocaleString();
+  usage.title = `${u.prompt} in / ${u.completion} out, ${u.calls} calls`;
+  cost.textContent = u.usd < 0.01 ? `$${u.usd.toFixed(4)}` : `$${u.usd.toFixed(2)}`;
 }
 
 // Fetches the event list and only advances knownEvents once it actually succeeds,
@@ -306,13 +358,12 @@ function showToast(text) { toast.textContent = text; toast.hidden = false; clear
 // ---------- wiring ----------
 form.addEventListener('submit', (e) => { e.preventDefault(); if (!session) start(rule.value.trim()); });
 stopBtn.addEventListener('click', () => stop());
+restartBtn.addEventListener('click', restart);
 flip.addEventListener('click', flipCamera);
 function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
 sample.addEventListener('input', showSample);
 showSample();
-resetUsageBtn.addEventListener('click', resetUsage);
-sample.addEventListener('input', () => (sampleValue.textContent = (sample.value / 1000).toFixed(2).replace(/0$/, '')));
-window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
+window.addEventListener('pagehide', () => { if (updates) updates.close(); if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
 watchSubscription();
 openCamera()

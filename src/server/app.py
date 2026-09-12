@@ -2,18 +2,20 @@
 
 import asyncio
 import base64
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 from pydantic import BaseModel
 
 from src import config
 from src.server.cv.perception import GrokPerception, Perception, PerceptionError, Usage
-from src.server.engine import handle_frame
+from src.server.engine import detection_status, handle_frame
 from src.server.notifier import Notifier
 from src.server.session import Session, SessionFull, SessionStore, Subscribers
 from src.server.telegram.bot import Bot
@@ -35,6 +37,12 @@ def create_app(
     subs: Optional[Subscribers] = None,
 ) -> FastAPI:
     subs = subs if subs is not None else Subscribers(100, 86400.0)
+    pending_sessions = 0
+
+    async def expire_sessions():
+        while True:
+            store.sweep()
+            await asyncio.sleep(1)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -42,9 +50,19 @@ def create_app(
         if bot is not None:
             await bot.get_me()
             task = asyncio.create_task(poll(bot, store, subs))
-        yield
-        if task is not None:
-            task.cancel()
+        sweeper = asyncio.create_task(expire_sessions())
+        try:
+            yield
+        finally:
+            tasks = [sweeper] + ([task] if task is not None else [])
+            for session in store.all():
+                tasks.extend(session.notifications)
+                if session.task is not None:
+                    tasks.append(session.task)
+                store.delete(session.id)
+            for background in tasks:
+                background.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="camera events", lifespan=lifespan)
 
@@ -66,7 +84,7 @@ def create_app(
 
     def event_or_404(session_id: str, n: int):
         s = session_or_404(session_id)
-        if n >= len(s.watch.events):
+        if n < 0 or n >= len(s.watch.events):
             raise HTTPException(404, "no such event")
         return s.watch.events[n]
 
@@ -80,30 +98,35 @@ def create_app(
 
     @app.post("/session", status_code=201)
     async def create_session(body: NewSession):
+        nonlocal pending_sessions
         rule = body.rule.strip()
         if not rule:
             return JSONResponse(
                 {"error": "empty_rule", "hint": "describe something that happens"},
                 status_code=400,
             )
+        if len(store) + pending_sessions >= store.max_sessions:
+            return JSONResponse({"error": "full"}, status_code=503)
+        pending_sessions += 1
         try:
             spec = await perception.normalize(rule)
+            if not spec.is_transition:
+                return JSONResponse(
+                    {
+                        "error": "not_a_transition",
+                        "hint": "describe something that happens - e.g. 'the cat jumps onto the table'",
+                    },
+                    status_code=400,
+                )
+            session = store.create(rule, spec)
         except PerceptionError as e:
             return JSONResponse(
                 {"error": "perception", "hint": str(e)}, status_code=502
             )
-        if not spec.is_transition:
-            return JSONResponse(
-                {
-                    "error": "not_a_transition",
-                    "hint": "describe something that happens - e.g. 'the cat jumps onto the table'",
-                },
-                status_code=400,
-            )
-        try:
-            session = store.create(rule, spec)
         except SessionFull:
             return JSONResponse({"error": "full"}, status_code=503)
+        finally:
+            pending_sessions -= 1
         if body.subscriber and body.subscriber in subs:
             session.subscriber = body.subscriber
         w = session.watch
@@ -111,7 +134,11 @@ def create_app(
             "session_id": session.id,
             "predicate": w.predicate,
             "direction": w.direction,
-            "telegram_link": bot.deep_link(session.id) if bot else None,
+            "telegram_link": (
+                bot.deep_link(session.subscriber)
+                if bot and session.subscriber
+                else None
+            ),
             "usage": session.usage.as_dict(),
         }
 
@@ -160,6 +187,26 @@ def create_app(
             "linked": s.chat_id is not None,
         }
 
+    @app.get("/session/{session_id}/updates")
+    async def updates(session_id: str):
+        session = session_or_404(session_id)
+
+        async def stream():
+            while not session.closed:
+                session.changed.clear()
+                yield "data: " + json.dumps(detection_status(session)) + "\n\n"
+                try:
+                    await asyncio.wait_for(session.changed.wait(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+            yield "event: expired\ndata: {}\n\n"
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/session/{session_id}/usage")
     async def usage(session_id: str):
         return session_or_404(session_id).usage.as_dict()
@@ -167,7 +214,10 @@ def create_app(
     @app.post("/session/{session_id}/usage/reset")
     async def reset_usage(session_id: str):
         session = session_or_404(session_id)
+        logger.info("session={} usage reset from {}", session_id, session.usage)
         session.usage = Usage()
+        session.revision += 1
+        session.changed.set()
         return session.usage.as_dict()
 
     @app.get("/subscriber/{token}/qr.svg")

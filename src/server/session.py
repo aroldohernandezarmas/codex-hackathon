@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from loguru import logger
+
 from src.server.cv.gate import Gate
 from src.server.cv.perception import Rule, Usage
 from src.server.tracker import Tracker
@@ -56,7 +58,12 @@ class Session:
     watch: Watch  # ponytail: one rule per session; -> watches: list[Watch] for several
     busy: bool = False  # a model call is in flight
     subscriber: Optional[str] = None  # Subscriber.token to notify when an event fires
+    retry: bool = False  # retry failed perception on the next available frame
     usage: Usage = field(default_factory=Usage)  # API tokens spent by this session
+    revision: int = 0
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    closed: bool = False
+    notifications: set[asyncio.Task] = field(default_factory=set)
     last_seen: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(
         default_factory=asyncio.Lock
@@ -71,6 +78,7 @@ class SessionStore:
         self._sessions: dict[str, Session] = {}
 
     def __len__(self) -> int:
+        self.sweep()
         return len(self._sessions)
 
     def create(self, rule: str, spec: Rule) -> Session:
@@ -83,26 +91,36 @@ class SessionStore:
             Watch(rule, spec.predicate, spec.direction, Tracker(spec.direction)),
         )
         session.usage += spec.usage  # the normalize call is billed to this session
+        logger.info("session={} usage +{} (normalize)", session.id, spec.usage)
         self._sessions[session.id] = session
         return session
 
     def all(self) -> list[Session]:
+        self.sweep()
         return list(self._sessions.values())
 
     def get(self, session_id: str) -> Session:
+        self.sweep()
         return self._sessions[session_id]
 
     def touch(self, session: Session) -> None:
         session.last_seen = time.monotonic()
 
     def delete(self, session_id: str) -> None:
-        self._sessions.pop(session_id, None)
+        session = self._sessions.pop(session_id, None)
+        if session is not None:
+            session.closed = True
+            session.changed.set()
+            if session.task is not None:
+                session.task.cancel()
+            for task in session.notifications:
+                task.cancel()
 
     def sweep(self, now: float | None = None) -> int:
         now = time.monotonic() if now is None else now
         dead = [k for k, s in self._sessions.items() if now - s.last_seen > self.ttl]
         for k in dead:
-            del self._sessions[k]
+            self.delete(k)
         return len(dead)
 
 

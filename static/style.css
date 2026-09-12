@@ -42,8 +42,10 @@ input[type="text"]:disabled { color: var(--muted); }
 button { padding: 12px 18px; border-radius: 10px; border: 0; background: var(--accent); color: #241a05; font-weight: 700; font-size: 15px; cursor: pointer; }
 button.secondary { background: var(--line); color: var(--text); }
 button:disabled { opacity: .6; cursor: wait; }
-.usage { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
-.usage button { margin-left: 8px; padding: 2px 8px; font-size: 12px; }
+.usage { display: flex; align-items: center; gap: 18px; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+.usage span { display: flex; flex-direction: column; min-width: 56px; }
+.usage b { font-size: 15px; font-weight: 600; color: var(--text); }
+.usage small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 .reading { margin: 10px 0 0; color: var(--accent); font-size: 14px; }
 .status { margin: 10px 0 0; color: var(--muted); min-height: 1.4em; }
 .status.error { color: var(--error); }
@@ -93,3 +95,8 @@ button:disabled { opacity: .6; cursor: wait; }
   .row button { width: 100%; }
   .events li { grid-template-columns: 96px 1fr; }
 }
+
+.telegram { margin-top: 16px; }
+.telegram a { color: var(--accent); }
+.telegram p { color: var(--muted); font-size: 13px; }
+.telegram img { border-radius: 8px; }

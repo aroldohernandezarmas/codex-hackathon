@@ -4,15 +4,22 @@ Integration seam: depend on the `Perception` protocol, not on `GrokPerception`.
 Tests inject a fake; the provider can be swapped without touching callers.
 """
 
+import asyncio
 import base64
 import json
 import re
 from dataclasses import dataclass, field
-from itertools import cycle
-from typing import Any, Iterator, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import httpx
 from loguru import logger
+
+from src.config import (
+    XAI_ATTEMPT_TIMEOUT,
+    XAI_PRICE_COMPLETION,
+    XAI_PRICE_PROMPT,
+    XAI_REQUEST_TIMEOUT,
+)
 
 BASE_URL = "https://api.x.ai/v1"
 
@@ -60,13 +67,26 @@ class Usage:
         self.calls += other.calls
         return self
 
+    @property
+    def usd(self) -> float:
+        return (
+            self.prompt * XAI_PRICE_PROMPT + self.completion * XAI_PRICE_COMPLETION
+        ) / 1_000_000
+
     def as_dict(self) -> dict:
         return {
             "prompt": self.prompt,
             "completion": self.completion,
             "total": self.prompt + self.completion,
             "calls": self.calls,
+            "usd": round(self.usd, 6),
         }
+
+    def __str__(self) -> str:
+        return (
+            f"{self.prompt}+{self.completion} tokens, "
+            f"{self.calls} calls, ${self.usd:.4f}"
+        )
 
 
 @dataclass
@@ -108,14 +128,22 @@ class GrokPerception:
         if not keys:
             raise PerceptionError("no XAI_API_KEYS configured")
         self.model = model
-        self._keys: Iterator[str] = cycle(keys)
-        self._retries = min(len(keys), 2)  # one retry on the next key, if any
+        self._keys = keys
+        self._active = 0  # sticky: the first key is primary, later ones are fallbacks
         self.client = httpx.AsyncClient(base_url=BASE_URL, timeout=30)
 
     async def aclose(self) -> None:
         await self.client.aclose()
 
     async def _ask(self, content: Any) -> tuple[str, Usage]:
+        try:
+            return await asyncio.wait_for(
+                self._ask_with_failover(content), XAI_REQUEST_TIMEOUT
+            )
+        except asyncio.TimeoutError as e:
+            raise PerceptionError("xAI request deadline exceeded") from e
+
+    async def _ask_with_failover(self, content: Any) -> tuple[str, Usage]:
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -123,19 +151,22 @@ class GrokPerception:
             "messages": [{"role": "user", "content": content}],
         }
         last: Optional[Exception] = None
-        for _ in range(self._retries):
-            key = next(self._keys)
+        for _ in self._keys:  # try each key at most once per call
+            key = self._keys[self._active]
             try:
-                response = await self.client.post(
-                    "/chat/completions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {key}"},
+                response = await asyncio.wait_for(
+                    self.client.post(
+                        "/chat/completions",
+                        json=payload,
+                        headers={"Authorization": f"Bearer {key}"},
+                    ),
+                    XAI_ATTEMPT_TIMEOUT,
                 )
                 if response.status_code in (429, 500, 502, 503):
                     last = PerceptionError(
                         f"xai {response.status_code}: {response.text[:120]}"
                     )
-                    logger.warning("{}; retrying on next key", last)
+                    self._failover(last)
                     continue
                 response.raise_for_status()
                 body = response.json()
@@ -146,10 +177,19 @@ class GrokPerception:
                     1,
                 )
                 return body["choices"][0]["message"].get("content") or "", usage
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, asyncio.TimeoutError) as e:
                 last = e
-                logger.warning("xai request failed: {!r}", e)
+                self._failover(e)
         raise PerceptionError(f"{type(last).__name__}: {last}" if last else "no keys")
+
+    def _failover(self, error: Exception) -> None:
+        if len(self._keys) == 1:
+            logger.warning("xai key failed: {!r}", error)
+            return
+        self._active = (self._active + 1) % len(self._keys)
+        logger.warning(
+            "xai key failed: {!r}; switching to key #{}", error, self._active + 1
+        )
 
     async def normalize(self, rule: str) -> Rule:
         raw, usage = await self._ask(NORMALIZE_PROMPT.format(rule=rule))

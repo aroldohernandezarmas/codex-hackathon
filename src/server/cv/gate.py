@@ -12,12 +12,12 @@ THRESHOLD = 6.6  # Lab levels in the loudest tile; recalibrate on your empty roo
 GLOBAL = (
     0.5  # loud tiles over this share of the board: light or exposure, not an object
 )
-PERSIST = 2  # frames in a row a change must hold before it is worth sending
-OVERLAP = 0.5  # share of loud tiles that must repeat from the previous frame
 
 
 def decode(image: bytes) -> np.ndarray:
     """JPEG/PNG bytes -> RGB uint8 array."""
+    if not image:
+        raise ValueError("not a decodable image")
     bgr = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
     if bgr is None:
         raise ValueError("not a decodable image")
@@ -54,26 +54,20 @@ class GateResult:
 
 
 class Gate:
-    """Per-session gate state: the anchor and how long the current change has held."""
+    """Per-session anchor; send the first changed frame without waiting."""
 
     def __init__(self) -> None:
         self.anchor: Optional[np.ndarray] = None
-        self.streak = 0
-        self.prev: Optional[np.ndarray] = None
 
-    def observe(self, frame: np.ndarray) -> GateResult:
+    def observe(self, frame: np.ndarray, advance: bool = True) -> GateResult:
         if self.anchor is None:
-            self.anchor = frame
+            if advance:
+                self.anchor = frame
             return GateResult("first", 0, True)
         mask = board(self.anchor, frame) > THRESHOLD
         v = verdict(mask)
         if v == "skip":
-            self.streak, self.prev = 0, None
             return GateResult(v, 0, False)
-        same = self.prev is not None and (mask & self.prev).sum() / mask.sum() > OVERLAP
-        self.streak = self.streak + 1 if same else 1
-        self.prev = mask
-        result = GateResult(v, self.streak, self.streak >= PERSIST and v == "change")
-        if self.streak >= PERSIST:  # change confirmed or light settled: new baseline
-            self.anchor, self.streak, self.prev = frame, 0, None
-        return result
+        if advance:  # only consume changes we can process
+            self.anchor = frame
+        return GateResult(v, 1, v == "change")

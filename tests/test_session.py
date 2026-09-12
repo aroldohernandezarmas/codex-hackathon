@@ -49,3 +49,29 @@ def test_delete():
     store.delete(s.id)
     assert len(store) == 0
     store.delete("missing")  # no error
+
+
+def test_reads_expire_sessions_without_creating_another():
+    for read in ("get", "all", "len"):
+        store = SessionStore(1, 30)
+        s = store.create("a", RULE)
+        s.last_seen = 0
+        if read == "get":
+            with pytest.raises(KeyError):
+                store.get(s.id)
+        elif read == "all":
+            assert store.all() == []
+        else:
+            assert len(store) == 0
+
+
+async def test_expiry_cancels_inflight_perception():
+    import asyncio
+
+    store = SessionStore(1, 30)
+    s = store.create("a", RULE)
+    s.task = asyncio.create_task(asyncio.sleep(60))
+    s.last_seen = 0
+    store.sweep()
+    with pytest.raises(asyncio.CancelledError):
+        await s.task

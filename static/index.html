@@ -31,15 +31,18 @@
       <div class="row">
         <input id="rule" type="text" placeholder="the cat jumps onto the table" autocomplete="off" required>
         <button id="start" type="submit">Watch</button>
+        <button id="restart" type="button" class="secondary" hidden title="New session, same rule: state, events, tokens, timer">Reset</button>
         <button id="stop" type="button" class="secondary" hidden>Stop</button>
       </div>
       <p id="reading" class="reading" hidden></p>
       <p id="status" class="status">Allow the camera to begin.</p>
-      <p class="usage">tokens: <span id="usage">0</span>
-        <button id="resetUsage" type="button" class="secondary" hidden>reset</button>
-      </p>
-      <label class="slider">every <output id="sampleValue">1</output>s
-        <input id="sample" type="range" min="1000" max="10000" step="1000" value="1000">
+      <div class="usage">
+        <span><b id="elapsed">0:00</b><small>time</small></span>
+        <span><b id="usage">0</b><small>tokens</small></span>
+        <span><b id="cost">$0.00</b><small>spent</small></span>
+      </div>
+      <label class="slider">every <output id="sampleValue">0.25</output>s
+        <input id="sample" type="range" min="250" max="10000" step="250" value="250">
       </label>
     </form>
   </section>
