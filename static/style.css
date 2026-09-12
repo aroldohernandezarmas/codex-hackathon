@@ -11,7 +11,17 @@ body.flash { animation: flash .6s ease-out; }
 .app { max-width: 720px; margin: 0 auto; padding: 20px 16px 48px; }
 .top h1 { margin: 0; font-size: 28px; letter-spacing: .5px; }
 .top h1::before { content: "◉ "; color: var(--accent); }
-.tagline { margin: 4px 0 18px; color: var(--muted); }
+.tagline { margin: 4px 0 12px; color: var(--muted); }
+
+/* Short primer above the viewfinder. Open by default, folds away once read. */
+.primer { margin: 0 0 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
+.primer summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600;
+                  text-transform: uppercase; letter-spacing: 1px; list-style: none; }
+.primer summary::-webkit-details-marker { display: none; }
+.primer summary::before { content: "\25b8 "; color: var(--accent); }
+.primer[open] summary::before { content: "\25be "; }
+.primer p { margin: 8px 0 2px; color: var(--muted); font-size: 14px; }
+.primer b { color: var(--text); font-weight: 600; }
 
 .stage { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
 .viewfinder { position: relative; background: #000; aspect-ratio: 16 / 9; }
