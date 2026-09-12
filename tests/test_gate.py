@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from src.server.cv.gate import PERSIST, THRESHOLD, Gate, board, decode
+from src.server.cv.gate import THRESHOLD, Gate, board, decode
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 
@@ -24,13 +24,12 @@ def test_lamp_is_quiet_and_object_is_loud(base):
     assert board(base, lamp).max() < THRESHOLD < board(base, covered).max()
 
 
-def test_gate_sends_first_then_needs_persist(base):
+def test_gate_sends_first_changed_frame_immediately(base):
     covered = base.copy()
     covered[:90, :160] = 0
     gate = Gate()
     assert gate.observe(base).send is True  # first frame
     assert gate.observe(base).send is False  # same picture: skip
-    assert gate.observe(covered).streak == 1  # change, not persisted yet
-    two = gate.observe(covered)
-    assert (two.streak, two.send) == (PERSIST, True)
+    changed = gate.observe(covered)
+    assert (changed.verdict, changed.send) == ("change", True)
     assert gate.observe(covered).verdict == "skip"  # anchor moved

@@ -3,10 +3,11 @@
 Multi-user: many browser tabs post frames into one event loop. Two rules keep one user
 from stalling the others: decode + gate (cv2/numpy, CPU-bound) run in a worker thread,
 and the model call runs as a background task - POST /frame returns at once with
-sent=True, and the answer shows up in the next frame's status (state/evidence/fired/events).
+sent=True, and model results are pushed to the browser over SSE.
 """
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from loguru import logger
@@ -17,6 +18,17 @@ from src.server.notifier import Notifier
 from src.server.session import Event, Session, Watch
 
 
+def detection_status(session: Session) -> dict:
+    w = session.watch
+    return {
+        "revision": session.revision,
+        "state": w.tracker.state,
+        "evidence": w.evidence,
+        "events": len(w.events),
+        "usage": session.usage.as_dict(),
+    }
+
+
 def _status(session: Session, gate: GateResult, sent: bool) -> dict:
     w = session.watch
     fired, w.fired = w.fired, False  # reported once, on the next status
@@ -25,11 +37,8 @@ def _status(session: Session, gate: GateResult, sent: bool) -> dict:
         "streak": gate.streak,
         "sent": sent,
         "busy": session.busy,
-        "state": w.tracker.state,
-        "evidence": w.evidence,
         "fired": fired,
-        "events": len(w.events),
-        "usage": session.usage.as_dict(),
+        **detection_status(session),
     }
 
 
@@ -38,8 +47,10 @@ async def handle_frame(
 ) -> dict:
     async with session.lock:  # gate state is per-session and not thread-safe
         frame = await asyncio.to_thread(decode, jpeg)  # raises ValueError on junk
-        gate = await asyncio.to_thread(session.gate.observe, frame)
-        skip = "busy" if session.busy else None if gate.send else "gate"
+        gate = await asyncio.to_thread(session.gate.observe, frame, not session.busy)
+        skip = (
+            "busy" if session.busy else None if gate.send or session.retry else "gate"
+        )
         logger.debug(
             "session={} frame gate={} streak={} {}",
             session.id,
@@ -49,6 +60,7 @@ async def handle_frame(
         )
         if skip:
             return _status(session, gate, sent=False)
+        session.retry = False
         session.busy = True
         session.task = asyncio.create_task(
             perceive(session, jpeg, perception, notifier)
@@ -66,6 +78,17 @@ async def perceive(
         await _observe(session, jpeg, perception, notifier)
     finally:
         session.busy = False
+        session.revision += 1
+        session.changed.set()
+
+
+async def _notify(
+    notifier: Notifier, session_id: str, watch: Watch, event: Event
+) -> None:
+    try:
+        await notifier.notify(session_id, watch, event)
+    except Exception:
+        logger.exception("session={} notification failed", session_id)
 
 
 async def _observe(
@@ -75,6 +98,7 @@ async def _observe(
     try:
         observation = await perception.detect(jpeg, w.predicate)
     except PerceptionError as e:
+        session.retry = True
         logger.warning("session={} perception failed: {}", session_id, e)
         return
     session.usage += observation.usage
@@ -101,4 +125,6 @@ async def _observe(
         )
         w.events.append(event)
         w.fired = True
-        await notifier.notify(session_id, w, event)
+        task = asyncio.create_task(_notify(notifier, session_id, replace(w), event))
+        session.notifications.add(task)
+        task.add_done_callback(session.notifications.discard)

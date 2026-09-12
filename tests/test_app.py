@@ -89,9 +89,8 @@ def test_frame_flow_fires_once(world):
     assert (s["gate"], s["sent"], s["state"]) == ("first", True, None)
     s = post_frame(client, sid, quiet).json()  # same picture: skipped; baseline False
     assert (s["gate"], s["sent"], s["state"]) == ("skip", False, False)
-    assert post_frame(client, sid, changed).json()["streak"] == 1  # not yet persisted
     assert post_frame(client, sid, changed).json()["sent"] is True  # -> True: fires
-    s = post_frame(client, sid, quiet).json()
+    s = post_frame(client, sid, changed).json()
     assert (s["fired"], s["state"], s["events"]) == (True, True, 1)
     s = post_frame(client, sid, changed).json()  # == anchor: skip; fired reported once
     assert (s["gate"], s["fired"]) == ("skip", False)
@@ -137,3 +136,100 @@ def test_usage_accumulates_per_session_and_resets(world):
     assert client.get(f"/session/{other}/usage").json()["total"] == 0
     assert client.post(f"/session/{sid}/usage/reset").json()["total"] == 0
     assert client.get(f"/session/{sid}").json()["usage"]["calls"] == 0
+
+
+def test_empty_frame_and_negative_event_numbers(world):
+    client, perception, _ = world
+    sid = new_session(client)
+    assert post_frame(client, sid, b"").status_code == 400
+    for suffix in ("-1", "-1.jpg", "-999"):
+        assert client.get(f"/session/{sid}/events/{suffix}").status_code == 404
+    perception.answers = [True]
+    post_frame(client, sid, jpeg("1.png"))
+    assert client.get(f"/session/{sid}/events/0").status_code == 200
+    assert client.get(f"/session/{sid}/events/-1").status_code == 404
+
+
+async def test_capacity_reserved_before_normalizing_and_released_on_failure():
+    import asyncio
+
+    import httpx
+
+    from src.server.cv.perception import PerceptionError
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    class SlowPerception(FakePerception):
+        async def normalize(self, rule):
+            nonlocal calls
+            calls += 1
+            entered.set()
+            await release.wait()
+            if calls == 1:
+                raise PerceptionError("temporary failure")
+            return await super().normalize(rule)
+
+    app = create_app(SlowPerception(), SessionStore(1, 30), Notifier())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = asyncio.create_task(client.post("/session", json={"rule": "arrives"}))
+        await entered.wait()
+        assert (
+            await client.post("/session", json={"rule": "arrives"})
+        ).status_code == 503
+        assert calls == 1
+        release.set()
+        assert (await first).status_code == 502
+        assert (
+            await client.post("/session", json={"rule": "arrives"})
+        ).status_code == 201
+        assert (
+            await client.post("/session", json={"rule": "arrives"})
+        ).status_code == 503
+        assert calls == 2
+
+
+async def test_lifespan_expires_sessions_without_requests():
+    import asyncio
+
+    store = SessionStore(1, 30)
+    s = store.create("arrives", Rule("present", "rising", True))
+    app = create_app(FakePerception(), store, Notifier())
+    async with app.router.lifespan_context(app):
+        s.last_seen = 0
+        await asyncio.sleep(0)
+        assert not store._sessions
+
+
+async def test_sse_delivers_result_without_another_frame_and_closes_on_delete():
+    import asyncio
+    import json
+
+    from src.server.engine import handle_frame
+
+    store = SessionStore(1, 30)
+    perception = FakePerception()
+    perception.answers = [True]
+    s = store.create("arrives", Rule("present", "rising", True))
+    app = create_app(perception, store, Notifier())
+    endpoint = next(
+        r.endpoint
+        for r in app.routes
+        if getattr(r, "path", "") == "/session/{session_id}/updates"
+    )
+    response = await endpoint(s.id)
+    stream = response.body_iterator
+    assert response.media_type == "text/event-stream"
+    assert json.loads((await anext(stream)).removeprefix("data: "))["state"] is None
+    pending = asyncio.create_task(anext(stream))
+    await handle_frame(s, jpeg("1.png"), perception, Notifier())
+    await s.task
+    status = json.loads((await asyncio.wait_for(pending, 1)).removeprefix("data: "))
+    assert status["state"] is True and status["events"] == 1
+    assert status["revision"] == 1
+    pending = asyncio.create_task(anext(stream))
+    store.delete(s.id)
+    assert "event: expired" in await asyncio.wait_for(pending, 1)
+    await stream.aclose()

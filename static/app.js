@@ -7,6 +7,9 @@ const startBtn = $('start'), stopBtn = $('stop'), restartBtn = $('restart'), sam
 const reading = $('reading'), status = $('status'), gatePill = $('gate'), statePill = $('state'), flip = $('flip');
 const evidence = $('evidence'), events = $('events'), toast = $('toast');
 const usage = $('usage'), cost = $('cost'), elapsed = $('elapsed');
+const telegram = $('telegram'), telegramLink = $('telegramLink'), telegramQr = $('telegramQr');
+let generation = 0;
+let updates = null, lastRevision = -1, announcedEvents = 0;
 let startedAt = 0, clock = null;
 function showElapsed() {
   const s = Math.floor((Date.now() - startedAt) / 1000);
@@ -107,27 +110,34 @@ async function tick() {
   if (!session) return;
   if (outstanding >= MAX_OUTSTANDING) return; // already at the concurrency cap — skip this sample
   if (video.readyState < 2) return; // HAVE_CURRENT_DATA — mid camera swap, no frame to grab
+  const currentSession = session;
   outstanding++;
   const mySeq = ++uploadSeq;
   try {
     const fd = new FormData();
-    fd.append('frame', await grabJpeg(), 'frame.jpg');
-    const s = await api(`/session/${session.session_id}/frame`, { method: 'POST', body: fd });
+    const jpeg = await grabJpeg();
+    if (session !== currentSession) return;
+    fd.append('frame', jpeg, 'frame.jpg');
+    const s = await api(`/session/${currentSession.session_id}/frame`, { method: 'POST', body: fd });
     // Concurrent uploads can resolve out of order — drop a response older than
     // the newest one already rendered.
+    if (session !== currentSession) return;
     if (mySeq > lastRenderedSeq) {
       lastRenderedSeq = mySeq;
       render(s);
     }
   } catch (e) {
+    if (session !== currentSession) return;
     if (e.status === 404) { stop('Session expired — start again.'); return; }
     say(`Upload failed: ${e.message}`, true);
   } finally {
-    outstanding--;
+    if (session === currentSession) outstanding--;
   }
 }
 
 async function start(ruleText) {
+  if (startBtn.disabled) return;
+  const attempt = ++generation;
   startBtn.disabled = true;
   if (!video.srcObject) {
     try {
@@ -138,12 +148,19 @@ async function start(ruleText) {
       return;
     }
   }
+  if (attempt !== generation) return;
   say('Understanding the rule…');
   try {
-    session = await api('/session', {
+    const created = await api('/session', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rule: ruleText }),
     });
+    if (attempt !== generation) {
+      api(`/session/${created.session_id}`, { method: 'DELETE' }).catch(() => {});
+      return;
+    }
+    session = created;
   } catch (e) {
+    if (attempt !== generation) return;
     startBtn.disabled = false;
     if (e.status === 503) { say('The room is full right now. Try again in a minute.', true); return; }
     say(e.message, true);
@@ -151,6 +168,12 @@ async function start(ruleText) {
   }
   startBtn.disabled = false;
   startBtn.hidden = true; stopBtn.hidden = false; restartBtn.hidden = false; rule.disabled = true;
+  telegram.hidden = !session.telegram_link;
+  if (session.telegram_link) {
+    telegramLink.href = session.telegram_link;
+    telegramQr.src = `/session/${session.session_id}/qr.svg`;
+  }
+  lastRevision = -1; announcedEvents = 0;
   renderUsage(session.usage);
   startedAt = Date.now(); showElapsed(); clock = setInterval(showElapsed, 1000);
   const arrow = session.direction === 'rising' ? 'becomes true' : 'becomes false';
@@ -160,27 +183,33 @@ async function start(ruleText) {
   outstanding = 0; uploadSeq = 0; lastRenderedSeq = -1;
   setPill(statePill, 'unknown', 'idle');
   say('Watching.');
+  connectUpdates();
   tick();
 }
 
 async function restart() {
   if (!session) return;
-  clearTimeout(timer); timer = null; clearInterval(clock); clock = null;
-  api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {});
-  session = null;
-  await start(rule.value.trim()); // camera stays open; state, events, tokens, timer reset
+  const deletion = stop(undefined, true);
+  const attempt = generation;
+  await deletion;
+  if (attempt === generation) await start(rule.value.trim());
 }
 
-function stop(message) {
+function stop(message, keepCamera = false) {
+  generation++;
+  if (updates) { updates.close(); updates = null; }
   clearTimeout(timer); timer = null;
-  if (session) api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {});
+  const deletion = session ? api(`/session/${session.session_id}`, { method: 'DELETE' }).catch(() => {}) : Promise.resolve();
   session = null;
-  releaseCamera();
+  if (!keepCamera) releaseCamera();
+  startBtn.disabled = false;
   startBtn.hidden = false; stopBtn.hidden = true; restartBtn.hidden = true; rule.disabled = false;
+  telegram.hidden = true; telegramLink.removeAttribute('href'); telegramQr.removeAttribute('src');
   reading.hidden = true;
   clearInterval(clock); clock = null;
-  setPill(gatePill, 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
+  setPill(gatePill, keepCamera ? 'ready' : 'camera off', 'idle'); setPill(statePill, 'no rule', 'idle');
   say(message || 'Stopped.');
+  return deletion;
 }
 
 // ---------- render ----------
@@ -191,11 +220,31 @@ function render(s) {
   if (!session) return; // response arrived after Stop cleared the session — nothing to render
   const label = s.sent ? 'asking the model' : s.busy ? 'model busy' : GATE_LABEL[s.gate] + (s.streak ? ` ×${s.streak}` : '');
   setPill(gatePill, label, s.sent ? 'send' : GATE_TONE[s.gate]);
+  renderDetection(s);
+}
+
+function connectUpdates() {
+  const currentSession = session;
+  updates = new EventSource(`/session/${session.session_id}/updates`);
+  updates.onmessage = (event) => {
+    if (session === currentSession) renderDetection(JSON.parse(event.data));
+  };
+  updates.addEventListener('expired', () => {
+    if (session === currentSession) stop('Session expired — start again.');
+  });
+}
+
+function renderDetection(s) {
+  if (!session || (s.revision !== undefined && s.revision < lastRevision)) return;
+  if (s.revision !== undefined) lastRevision = s.revision;
   if (s.state === null) setPill(statePill, 'unknown', 'idle');
   else setPill(statePill, s.state ? 'TRUE' : 'false', s.state ? 'true' : 'false');
-  if (s.evidence) evidence.textContent = `“${s.evidence}”`;
+  evidence.textContent = s.evidence ? `“${s.evidence}”` : '—';
   if (s.events > knownEvents) refreshEvents(s.events);
-  if (s.fired) { flash(); showToast('Event! ' + session.predicate); }
+  if (s.events > announcedEvents) {
+    announcedEvents = s.events;
+    flash(); showToast('Event! ' + session.predicate);
+  }
   if (s.usage) renderUsage(s.usage);
 }
 
@@ -248,7 +297,7 @@ flip.addEventListener('click', flipCamera);
 function showSample() { sampleValue.textContent = String(Number(sample.value) / 1000); }
 sample.addEventListener('input', showSample);
 showSample();
-window.addEventListener('pagehide', () => { if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
+window.addEventListener('pagehide', () => { if (updates) updates.close(); if (session) navigator.sendBeacon && fetch(`/session/${session.session_id}`, { method: 'DELETE', keepalive: true }); releaseCamera(); });
 
 openCamera()
   .then(revealFlipIfMultiCamera)

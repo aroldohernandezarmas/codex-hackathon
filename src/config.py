@@ -15,6 +15,8 @@ XAI_API_KEYS = [
     k.strip() for k in os.getenv("XAI_API_KEYS", "").split(",") if k.strip()
 ]
 XAI_MODEL = os.getenv("XAI_MODEL", "grok-4.20-0309-non-reasoning")
+XAI_REQUEST_TIMEOUT = float(os.getenv("XAI_REQUEST_TIMEOUT", "10"))
+XAI_ATTEMPT_TIMEOUT = float(os.getenv("XAI_ATTEMPT_TIMEOUT", "5"))
 # USD per 1M tokens, used only to estimate spend in the UI and logs
 XAI_PRICE_PROMPT = float(os.getenv("XAI_PRICE_PROMPT", "3.0"))
 XAI_PRICE_COMPLETION = float(os.getenv("XAI_PRICE_COMPLETION", "15.0"))

@@ -70,3 +70,8 @@ button:disabled { opacity: .6; cursor: wait; }
   .row button { width: 100%; }
   .events li { grid-template-columns: 96px 1fr; }
 }
+
+.telegram { margin-top: 16px; }
+.telegram a { color: var(--accent); }
+.telegram p { color: var(--muted); font-size: 13px; }
+.telegram img { border-radius: 8px; }

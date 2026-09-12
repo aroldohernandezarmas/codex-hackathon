@@ -35,13 +35,18 @@
       </div>
       <p id="reading" class="reading" hidden></p>
       <p id="status" class="status">Allow the camera to begin.</p>
+      <div id="telegram" class="telegram" hidden>
+        <a id="telegramLink" target="_blank" rel="noopener noreferrer">Connect Telegram notifications</a>
+        <p>Open the link on this device, or scan the QR code with your phone, then press Start in Telegram.</p>
+        <img id="telegramQr" width="160" height="160" alt="QR code to connect Telegram notifications">
+      </div>
       <div class="usage">
         <span><b id="elapsed">0:00</b><small>time</small></span>
         <span><b id="usage">0</b><small>tokens</small></span>
         <span><b id="cost">$0.00</b><small>spent</small></span>
       </div>
-      <label class="slider">every <output id="sampleValue">1</output>s
-        <input id="sample" type="range" min="1000" max="10000" step="1000" value="1000">
+      <label class="slider">every <output id="sampleValue">0.25</output>s
+        <input id="sample" type="range" min="250" max="10000" step="250" value="250">
       </label>
     </form>
   </section>

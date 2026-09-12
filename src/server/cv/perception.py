@@ -4,6 +4,7 @@ Integration seam: depend on the `Perception` protocol, not on `GrokPerception`.
 Tests inject a fake; the provider can be swapped without touching callers.
 """
 
+import asyncio
 import base64
 import json
 import re
@@ -13,7 +14,12 @@ from typing import Any, Optional, Protocol
 import httpx
 from loguru import logger
 
-from src.config import XAI_PRICE_COMPLETION, XAI_PRICE_PROMPT
+from src.config import (
+    XAI_ATTEMPT_TIMEOUT,
+    XAI_PRICE_COMPLETION,
+    XAI_PRICE_PROMPT,
+    XAI_REQUEST_TIMEOUT,
+)
 
 BASE_URL = "https://api.x.ai/v1"
 
@@ -130,6 +136,14 @@ class GrokPerception:
         await self.client.aclose()
 
     async def _ask(self, content: Any) -> tuple[str, Usage]:
+        try:
+            return await asyncio.wait_for(
+                self._ask_with_failover(content), XAI_REQUEST_TIMEOUT
+            )
+        except asyncio.TimeoutError as e:
+            raise PerceptionError("xAI request deadline exceeded") from e
+
+    async def _ask_with_failover(self, content: Any) -> tuple[str, Usage]:
         payload = {
             "model": self.model,
             "temperature": 0,
@@ -140,10 +154,13 @@ class GrokPerception:
         for _ in self._keys:  # try each key at most once per call
             key = self._keys[self._active]
             try:
-                response = await self.client.post(
-                    "/chat/completions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {key}"},
+                response = await asyncio.wait_for(
+                    self.client.post(
+                        "/chat/completions",
+                        json=payload,
+                        headers={"Authorization": f"Bearer {key}"},
+                    ),
+                    XAI_ATTEMPT_TIMEOUT,
                 )
                 if response.status_code in (429, 500, 502, 503):
                     last = PerceptionError(
@@ -160,7 +177,7 @@ class GrokPerception:
                     1,
                 )
                 return body["choices"][0]["message"].get("content") or "", usage
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, asyncio.TimeoutError) as e:
                 last = e
                 self._failover(e)
         raise PerceptionError(str(last))
