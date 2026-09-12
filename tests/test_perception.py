@@ -47,6 +47,22 @@ async def test_retry_on_429_then_error():
     assert seen == ["A", "B"]
 
 
+async def test_failover_sticks_to_backup_key():
+    seen = []
+
+    async def handler(request):
+        key = request.headers["authorization"][-1]
+        seen.append(key)
+        if key == "A":
+            return httpx.Response(401, json={"error": "bad key"})
+        return reply('{"state_now": false, "evidence": ""}')
+
+    p = make(handler)
+    await p.detect(b"x", "p")
+    await p.detect(b"x", "p")  # stays on B, no retry through A
+    assert seen == ["A", "B", "B"]
+
+
 async def test_usage_is_read_from_response():
     async def handler(request):
         return httpx.Response(

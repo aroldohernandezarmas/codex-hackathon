@@ -8,8 +8,7 @@ import base64
 import json
 import re
 from dataclasses import dataclass, field
-from itertools import cycle
-from typing import Any, Iterator, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import httpx
 from loguru import logger
@@ -123,8 +122,8 @@ class GrokPerception:
         if not keys:
             raise PerceptionError("no XAI_API_KEYS configured")
         self.model = model
-        self._keys: Iterator[str] = cycle(keys)
-        self._retries = min(len(keys), 2)  # one retry on the next key, if any
+        self._keys = keys
+        self._active = 0  # sticky: the first key is primary, later ones are fallbacks
         self.client = httpx.AsyncClient(base_url=BASE_URL, timeout=30)
 
     async def aclose(self) -> None:
@@ -138,8 +137,8 @@ class GrokPerception:
             "messages": [{"role": "user", "content": content}],
         }
         last: Optional[Exception] = None
-        for _ in range(self._retries):
-            key = next(self._keys)
+        for _ in self._keys:  # try each key at most once per call
+            key = self._keys[self._active]
             try:
                 response = await self.client.post(
                     "/chat/completions",
@@ -150,7 +149,7 @@ class GrokPerception:
                     last = PerceptionError(
                         f"xai {response.status_code}: {response.text[:120]}"
                     )
-                    logger.warning("{}; retrying on next key", last)
+                    self._failover(last)
                     continue
                 response.raise_for_status()
                 body = response.json()
@@ -163,8 +162,17 @@ class GrokPerception:
                 return body["choices"][0]["message"].get("content") or "", usage
             except httpx.HTTPError as e:
                 last = e
-                logger.warning("xai request failed: {}", e)
+                self._failover(e)
         raise PerceptionError(str(last))
+
+    def _failover(self, error: Exception) -> None:
+        if len(self._keys) == 1:
+            logger.warning("xai key failed: {}", error)
+            return
+        self._active = (self._active + 1) % len(self._keys)
+        logger.warning(
+            "xai key failed: {}; switching to key #{}", error, self._active + 1
+        )
 
     async def normalize(self, rule: str) -> Rule:
         raw, usage = await self._ask(NORMALIZE_PROMPT.format(rule=rule))
