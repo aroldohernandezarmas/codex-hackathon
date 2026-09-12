@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Watcher</title>
+<meta name="theme-color" content="#0b0f14" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f2f5f9" media="(prefers-color-scheme: light)">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -25,10 +27,10 @@
   <div class="workspace">
   <section class="stage">
     <div class="viewfinder">
-      <video id="video" autoplay playsinline muted></video>
+      <video id="video" autoplay playsinline muted aria-label="Live camera preview"></video>
       <canvas id="canvas" hidden></canvas>
-      <button id="flip" type="button" class="flip" hidden aria-label="Switch camera" title="Switch camera">⟳</button>
-      <div class="hud">
+      <button id="flip" type="button" class="flip" hidden aria-label="Switch camera" title="Switch camera"><span aria-hidden="true">⟳</span></button>
+      <div class="hud" role="status" aria-live="polite" aria-label="Camera and rule state">
         <span id="gate" class="pill pill-idle">camera off</span>
         <span id="state" class="pill pill-idle">no rule</span>
       </div>
@@ -36,21 +38,22 @@
 
     <form id="ruleForm" class="rule">
       <label for="rule">Tell me when…</label>
-      <ul id="rules" class="rules" hidden></ul>
+      <ul id="rules" class="rules" aria-live="polite" aria-label="Rules to watch for" hidden></ul>
       <div class="row">
         <input id="rule" type="text" placeholder="the cat jumps onto the table" autocomplete="off">
+        <button id="mic" type="button" class="mic" hidden aria-label="Dictate rule" title="Dictate rule"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg></button>
         <button id="add" type="submit" class="secondary" title="Add this rule to the list">+ Add</button>
         <button id="start" type="button">Watch</button>
         <button id="restart" type="button" class="secondary" hidden title="New session, same rules: state, events, tokens, timer">Reset</button>
         <button id="stop" type="button" class="secondary" hidden>Stop</button>
       </div>
-      <p id="status" class="status">Allow the camera to begin.</p>
+      <p id="status" class="status" role="status" aria-live="polite">Allow the camera to begin.</p>
       <div class="usage">
         <span><b id="elapsed">0:00</b><small>time</small></span>
         <span><b id="usage">0</b><small>tokens</small></span>
         <span><b id="cost">$0.00</b><small>spent</small></span>
       </div>
-      <label class="slider">every <output id="sampleValue">1</output>s
+      <label class="slider">Check every <output id="sampleValue">1</output> seconds
         <input id="sample" type="range" min="1000" max="10000" step="1000" value="1000">
       </label>
     </form>
@@ -65,15 +68,26 @@
     <span id="qrBadge" class="pill pill-idle">not linked</span>
     <p id="qrHint" class="qr-hint">Scan to get events in Telegram.</p>
   </aside>
-  </div>
 
   <section class="log">
     <h2>What happened</h2>
     <p id="evidence" class="evidence">—</p>
-    <ol id="events" class="events"></ol>
+    <ol id="events" class="events" tabindex="0" aria-live="polite" aria-label="Detected events, newest first"></ol>
   </section>
+  </div>
 </main>
-<div id="toast" class="toast" hidden></div>
+
+<dialog id="shotDialog" class="shot-dialog" aria-labelledby="shotCaption">
+  <form method="dialog" class="shot-close-form">
+    <button class="shot-close" value="close" aria-label="Close larger view"><span aria-hidden="true">✕</span></button>
+  </form>
+  <img id="shotImg" alt="">
+  <div class="shot-meta">
+    <b id="shotCaption"></b>
+    <time id="shotTime"></time>
+  </div>
+</dialog>
+<div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

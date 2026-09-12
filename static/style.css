@@ -1,120 +1,293 @@
-/* static/style.css */
+/* static/style.css
+   Theme: "calm guardian" - a home/small-business watcher, not a security-ops console.
+   Dark by default (nursery, hallway, shop at night), light when the OS asks for it.
+   Teal = watching / all clear. Amber-gold = something happened. */
 :root {
-  --bg: #0e1116; --panel: #161b23; --line: #232a35; --text: #e8ecf1; --muted: #8b95a5;
-  --accent: #ffb347; --true: #3ddc84; --false: #6b7a90; --warn: #ffb347; --info: #5aa9ff; --send: #c084fc; --error: #ff6b6b;
+  color-scheme: dark;
+  /* surfaces: warm-neutral charcoal, not cold slate */
+  --bg: #0b0f14; --panel: #131a23; --panel-2: #1a2431; --line: #263140;
+  --text: #e9eef5; --muted: #a2b0c2;
+  /* brand + semantics */
+  --brand: #3fd0c9; --brand-ink: #04211f; --brand-soft: rgba(63, 208, 201, .14);
+  --alert: #ffb84d; --alert-ink: #2a1a00; --alert-soft: rgba(255, 184, 77, .14);
+  --info: #7cbeff; --send: #cda4ff; --error: #ff8a8a; --ok: #5fd39b;
+  --accent: var(--brand);            /* kept: range/accent-color hooks */
+  --true: var(--alert); --false: var(--muted); --warn: var(--alert);
+  /* depth + shape */
+  --r-lg: 18px; --r-md: 12px; --r-sm: 9px;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -12px rgba(0,0,0,.6);
+  --ring: 0 0 0 3px rgba(63, 208, 201, .55);
 }
-* { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-body.flash { animation: flash .6s ease-out; }
-@keyframes flash { from { background: #3a2f10; } to { background: var(--bg); } }
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f2f5f9; --panel: #ffffff; --panel-2: #eaeff6; --line: #d6dfea;
+    --text: #0f1720; --muted: #54637a;
+    --brand: #0d827d; --brand-ink: #ffffff; --brand-soft: rgba(13, 130, 125, .10);
+    --alert: #9c5a00; --alert-ink: #ffffff; --alert-soft: rgba(156, 90, 0, .10);
+    --info: #10559e; --send: #7239c4; --error: #b3261e; --ok: #16794f;
+    --shadow: 0 1px 2px rgba(15,23,32,.06), 0 10px 24px -14px rgba(15,23,32,.25);
+    --ring: 0 0 0 3px rgba(13, 130, 125, .45);
+  }
+}
+/* HUD pills always sit on a dark video scrim, so they keep dark-mode colours in both themes. */
+:root {
+  --hud-bg: rgba(8, 12, 17, .84); --hud-line: rgba(255,255,255,.16); --hud-text: #f2f6fb;
+  --hud-muted: #b9c5d4; --hud-brand: #4fd8d1; --hud-alert: #ffc266; --hud-info: #8fc9ff; --hud-send: #d6b4ff;
+}
 
-.app { max-width: 720px; margin: 0 auto; padding: 20px 16px 48px; }
-.top h1 { margin: 0; font-size: 28px; letter-spacing: .5px; }
-.top h1::before { content: "◉ "; color: var(--accent); }
-.tagline { margin: 4px 0 12px; color: var(--muted); }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+             font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+             -webkit-font-smoothing: antialiased; }
+/* a soft hearth glow behind the page - domestic, not a control room */
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1;
+               background: radial-gradient(90ch 60ch at 50% -18%, var(--brand-soft), transparent 70%); }
+body.flash { animation: flash .7s ease-out; }
+@keyframes flash { from { background: var(--alert-soft); } to { background: var(--bg); } }
+
+:where(a, button, input, summary, [tabindex]):focus-visible {
+  outline: 2px solid transparent; box-shadow: var(--ring); border-radius: var(--r-sm);
+}
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+           overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.app { max-width: 760px; margin: 0 auto; padding: 28px 16px 56px; }
+
+/* ---------- header ---------- */
+.top { margin-bottom: 20px; }
+.top h1 { margin: 0; font-size: 30px; line-height: 1.1; letter-spacing: -.2px; font-weight: 700;
+          display: flex; align-items: center; gap: 10px; }
+.top h1::before { content: ""; flex: none; width: 26px; height: 26px; border-radius: 50%;
+                  border: 3px solid var(--brand); background:
+                  radial-gradient(circle at 50% 50%, var(--brand) 0 28%, transparent 29%); }
+.tagline { margin: 8px 0 14px; color: var(--muted); max-width: 52ch; }
 
 /* Short primer above the viewfinder. Open by default, folds away once read. */
-.primer { margin: 0 0 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; }
-.primer summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600;
-                  text-transform: uppercase; letter-spacing: 1px; list-style: none; }
+.primer { margin: 0; background: var(--panel); border: 1px solid var(--line);
+          border-radius: var(--r-md); padding: 12px 16px; }
+.primer summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700;
+                  text-transform: uppercase; letter-spacing: 1.2px; list-style: none;
+                  display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .primer summary::-webkit-details-marker { display: none; }
-.primer summary::before { content: "\25b8 "; color: var(--accent); }
-.primer[open] summary::before { content: "\25be "; }
-.primer p { margin: 8px 0 2px; color: var(--muted); font-size: 14px; }
-.primer b { color: var(--text); font-weight: 600; }
+.primer summary::before { content: "\25b8"; color: var(--brand); font-size: 14px; }
+.primer[open] summary::before { content: "\25be"; }
+.primer p { margin: 10px 0 2px; color: var(--muted); font-size: 14px; max-width: 66ch; }
+.primer b { color: var(--text); font-weight: 650; }
 
-.stage { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+/* ---------- stage ---------- */
+.workspace { margin-top: 16px; }
+.stage { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+         overflow: hidden; box-shadow: var(--shadow); }
 .viewfinder { position: relative; background: #000; aspect-ratio: 16 / 9; }
 .viewfinder video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .viewfinder video.mirrored { transform: scaleX(-1); }
-.hud { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
-.flip { position: absolute; top: 12px; right: 12px; width: 38px; height: 38px; padding: 0; font-size: 18px; line-height: 1;
-        border-radius: 999px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);
-        border: 1px solid rgba(255,255,255,.12); color: var(--text); }
+/* scrim so the HUD stays readable over any frame, bright or dark */
+.viewfinder::after { content: ""; position: absolute; inset: auto 0 0; height: 42%;
+                     background: linear-gradient(transparent, rgba(4, 7, 10, .7)); pointer-events: none; }
+.hud { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 1;
+       display: flex; gap: 8px; flex-wrap: wrap; }
+.flip { position: absolute; top: 12px; right: 12px; z-index: 1; width: 44px; height: 44px; padding: 0;
+        font-size: 19px; line-height: 1; border-radius: 999px; background: var(--hud-bg);
+        backdrop-filter: blur(8px); border: 1px solid var(--hud-line); color: var(--hud-text); }
 
-.pill { padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; letter-spacing: .3px;
-        background: rgba(0,0,0,.55); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); color: var(--text); }
-.pill-idle { color: var(--muted); }
-.pill-warn { border-color: var(--warn); color: var(--warn); }
-.pill-info { border-color: var(--info); color: var(--info); }
-.pill-send { border-color: var(--send); color: var(--send); animation: pulse 1s infinite; }
-.pill-true { background: var(--true); color: #052; border-color: var(--true); }
-.pill-false { color: var(--false); }
-@keyframes pulse { 50% { opacity: .55; } }
+/* Pills carry a glyph as well as a colour, so state never depends on colour alone. */
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+        font-size: 13px; font-weight: 650; letter-spacing: .2px; background: var(--hud-bg);
+        backdrop-filter: blur(8px); border: 1px solid var(--hud-line); color: var(--hud-text); }
+.pill::before { font-size: 11px; line-height: 1; }
+.pill-idle { color: var(--hud-muted); }
+.pill-idle::before { content: "\25cb"; }
+.pill-warn { border-color: var(--hud-alert); color: var(--hud-alert); }
+.pill-warn::before { content: "\25b2"; }
+.pill-info { border-color: var(--hud-info); color: var(--hud-info); }
+.pill-info::before { content: "\25c6"; }
+.pill-send { border-color: var(--hud-send); color: var(--hud-send); animation: pulse 1.1s infinite; }
+.pill-send::before { content: "\2191"; }
+.pill-true { background: var(--hud-alert); color: #2a1a00; border-color: var(--hud-alert); }
+.pill-true::before { content: "\25cf"; }
+.pill-false { color: var(--hud-muted); }
+.pill-false::before { content: "\2014"; }
+@keyframes pulse { 50% { opacity: .5; } }
+/* the linked / not-linked badge sits on a panel, not on video */
+.notify .pill { background: var(--panel-2); border-color: var(--line); color: var(--text); backdrop-filter: none; }
+.notify .pill-idle { color: var(--muted); }
+.notify .pill-true { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
 
-.rule { padding: 16px; }
-.rule label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+/* ---------- rule form ---------- */
+.rule { padding: 18px; display: grid; gap: 0; }
+.rule > label[for="rule"] { display: block; color: var(--text); font-size: 16px; font-weight: 650;
+                            margin-bottom: 8px; }
 .row { display: flex; gap: 8px; }
-input[type="text"] { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line);
-                     background: var(--bg); color: var(--text); font-size: 16px; }
-input[type="text"]:focus { outline: none; border-color: var(--accent); }
+input[type="text"] { flex: 1; min-width: 0; padding: 13px 15px; border-radius: var(--r-md);
+                     border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 16px; }
+input[type="text"]::placeholder { color: var(--muted); }
+input[type="text"]:focus-visible { border-color: var(--brand); }
 input[type="text"]:disabled { color: var(--muted); }
-button { padding: 12px 18px; border-radius: 10px; border: 0; background: var(--accent); color: #241a05; font-weight: 700; font-size: 15px; cursor: pointer; }
-button.secondary { background: var(--line); color: var(--text); }
+button { min-height: 46px; padding: 12px 20px; border-radius: var(--r-md); border: 1px solid transparent;
+         background: var(--brand); color: var(--brand-ink); font-weight: 700; font-size: 15px;
+         cursor: pointer; transition: filter .15s ease, background-color .15s ease; }
+button:hover:not(:disabled) { filter: brightness(1.08); }
+button.secondary { background: var(--panel-2); color: var(--text); border-color: var(--line); }
 button:disabled { opacity: .6; cursor: wait; }
-.usage { display: flex; align-items: center; gap: 18px; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
-.usage span { display: flex; flex-direction: column; min-width: 56px; }
-.usage b { font-size: 15px; font-weight: 600; color: var(--text); }
-.usage small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+
+/* Dictation toggle — square icon button, secondary look; pulses red while listening. */
+.mic { flex: none; width: 46px; padding: 0; font-size: 19px; line-height: 1;
+       background: var(--panel-2); color: var(--text); border-color: var(--line); }
+.mic.listening { background: var(--hud-alert); color: #2a1a00; border-color: var(--hud-alert);
+                 animation: pulse 1.1s infinite; }
+
+.usage { display: flex; align-items: stretch; gap: 0; margin: 16px 0 0; padding: 2px;
+         background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
+         font-variant-numeric: tabular-nums; }
+.usage span { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 64px;
+              padding: 8px 12px; }
+.usage span + span { border-left: 1px solid var(--line); }
+.usage b { font-size: 17px; font-weight: 650; color: var(--text); }
+.usage small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+
 .rules { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 6px; }
-.rules li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px;
-            background: var(--bg); border: 1px solid var(--line); font-size: 14px; }
+.rules li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--r-sm);
+            background: var(--brand-soft); border-left: 3px solid var(--brand); font-size: 14px; color: var(--text); }
 .rules li > div { flex: 1; min-width: 0; }
 .rules li b { font-weight: 600; }
-.rules li small { display: block; color: var(--accent); font-size: 12px; margin-top: 2px; }
-.rules li.true small { color: var(--text); }
+.rules li small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.rules li.true small { color: var(--text); font-weight: 600; }
 .rules li button { flex: none; padding: 4px 10px; font-size: 14px; background: transparent; color: var(--muted); border: 1px solid var(--line); }
-.rules li button:hover { color: var(--text); border-color: var(--muted); }
-.status { margin: 10px 0 0; color: var(--muted); min-height: 1.4em; }
-.status.error { color: var(--error); }
-.rule .slider { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 13px; }
-.slider input { flex: 1; accent-color: var(--accent); }
+.rules li button:hover:not(:disabled) { color: var(--text); border-color: var(--muted); filter: none; }
+.status { margin: 12px 0 0; color: var(--muted); min-height: 1.4em; font-size: 14px; }
+.status.error { color: var(--error); font-weight: 600; }
+.status.error::before { content: "\26a0 "; }
+.rule .slider { display: flex; align-items: center; gap: 12px; margin-top: 16px;
+                color: var(--muted); font-size: 13px; }
+.slider output { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.slider input { flex: 1; accent-color: var(--brand); height: 24px; }
 
-/* Telegram binding QR. Always on screen while a bot is configured, linked or not. */
-.notify { margin-top: 16px; padding: 16px; background: var(--panel); border: 1px solid var(--line);
-          border-radius: 16px; display: flex; flex-direction: column; align-items: center;
-          gap: 10px; text-align: center; }
-.notify h2 { margin: 0; font-size: 15px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+/* ---------- Telegram binding QR ---------- */
+/* Always on screen while a bot is configured, linked or not. */
+.notify { margin-top: 16px; padding: 18px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: var(--r-lg); box-shadow: var(--shadow); display: flex; flex-direction: column;
+          align-items: center; gap: 12px; text-align: center; }
+.notify h2 { margin: 0; font-size: 12px; color: var(--muted); font-weight: 700;
+             text-transform: uppercase; letter-spacing: 1.2px; }
 /* The plate is sized by the QR itself, so a failed image collapses to the fallback link
    instead of leaving a big white square. No line-height:0 here - the fallback is text. */
-.qr { display: flex; align-items: center; justify-content: center; min-height: 40px;
-      background: #fff; padding: 8px; border-radius: 10px; text-decoration: none; }
+.qr { display: flex; align-items: center; justify-content: center; min-height: 44px;
+      background: #fff; padding: 10px; border-radius: var(--r-md); text-decoration: none; }
 .qr img { display: block; width: 160px; height: 160px; }
 .qr img[hidden] { display: none; } /* the class rule above would beat the UA hidden rule */
-.qr-fallback { color: #1b4ed8; font-weight: 600; font-size: 14px; padding: 4px 8px; }
+.qr-fallback { color: #17429e; font-weight: 700; font-size: 14px; padding: 6px 10px; }
 .qr-hint { margin: 0; max-width: 30ch; color: var(--muted); font-size: 13px; }
 
-/* Beside the video once there is room for a 200px rail, stacked underneath below that.
+/* Beside the video once there is room for a rail: QR on top, event log under it.
+   Below that width the whole rail unstacks and the log sits under the stage, as before.
    The :has() guard keeps the rail from reserving an empty column when no bot is
    configured and the panel never appears. */
-@media (min-width: 700px) {
-  .app:has(.notify:not([hidden])) { max-width: 960px; }
+@media (min-width: 820px) {
+  .app:has(.notify:not([hidden])) { max-width: 1080px; }
   .workspace:has(.notify:not([hidden])) {
-    display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 16px; align-items: start;
+    display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto 1fr;
+    gap: 16px; align-items: start;
   }
-  .workspace:has(.notify:not([hidden])) .notify { margin-top: 0; position: sticky; top: 20px; }
+  /* the stage spans both rows, so the rail stacks against its full height */
+  .workspace:has(.notify:not([hidden])) .stage { grid-column: 1; grid-row: 1 / -1; }
+  .workspace:has(.notify:not([hidden])) .notify { grid-column: 2; grid-row: 1; margin-top: 0; }
+  .workspace:has(.notify:not([hidden])) .log { grid-column: 2; grid-row: 2; margin-top: 0; min-height: 0; }
+  /* narrow column: tighter thumbnails, and the list scrolls instead of running off the page */
+  .workspace:has(.notify:not([hidden])) .events { max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+  .workspace:has(.notify:not([hidden])) .events li { grid-template-columns: 84px 1fr; gap: 10px; }
+  .workspace:has(.notify:not([hidden])) .events img { width: 84px; }
+  .workspace:has(.notify:not([hidden])) .events .shot { width: 84px; }
 }
 
-.log { margin-top: 20px; }
-.log h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 1px; }
-.evidence { margin: 0 0 12px; font-style: italic; color: var(--text); }
-.events { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.events li { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: center;
-             background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px; }
-.events img { width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 8px; display: block; }
-.events time { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+/* ---------- event log ---------- */
+/* Same card as the stage and the QR panel, so all three read as one family. */
+.log { margin-top: 16px; padding: 18px; background: var(--panel); border: 1px solid var(--line);
+       border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.log h2 { font-size: 12px; color: var(--muted); font-weight: 700; margin: 0 0 8px;
+          text-transform: uppercase; letter-spacing: 1.2px; }
+.evidence { margin: 0 0 14px; color: var(--text); font-size: 14px; }
+/* a timeline rail: events read as a sequence, newest first. Rows stay flat - they sit
+   inside the card already, and a card inside a card just adds noise. */
+.events { list-style: none; margin: 0; padding: 0 0 0 18px; display: grid; gap: 4px;
+          position: relative; }
+.events:not(:empty)::before { content: ""; position: absolute; left: 4px; top: 14px; bottom: 14px;
+                              width: 2px; background: var(--line); border-radius: 2px; }
+.events li { position: relative; display: grid; grid-template-columns: 112px 1fr; gap: 14px;
+             align-items: center; padding: 8px 0; }
+.events li + li { border-top: 1px solid var(--line); }
+.events li::before { content: ""; position: absolute; left: -18px; top: 50%; width: 10px; height: 10px;
+                     margin-top: -5px; border-radius: 50%; background: var(--alert);
+                     box-shadow: 0 0 0 3px var(--panel); }
+/* the thumbnail is a button - it opens the full-size frame */
+.events .shot { padding: 0; border: 1px solid var(--line); background: var(--panel-2);
+                border-radius: var(--r-sm); overflow: hidden; min-height: 0; cursor: zoom-in;
+                display: block; line-height: 0; position: relative; }
+.events .shot:hover img { filter: brightness(1.06); }
+.events .shot::after { content: "\2922"; position: absolute; right: 4px; bottom: 4px; line-height: 1;
+                       font-size: 11px; padding: 3px 4px; border-radius: 4px; color: var(--hud-text);
+                       background: var(--hud-bg); opacity: 0; transition: opacity .15s ease; }
+.events .shot:hover::after, .events .shot:focus-visible::after { opacity: 1; }
+.events img { width: 112px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--r-sm);
+              display: block; background: var(--panel-2); }
+.events time { display: block; color: var(--muted); font-size: 13px; margin-top: 4px;
+               font-variant-numeric: tabular-nums; }
 
-.toast { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); background: var(--true); color: #052;
-         padding: 10px 16px; border-radius: 999px; font-weight: 700; box-shadow: 0 6px 24px rgba(0,0,0,.4); z-index: 10; }
+.toast { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); background: var(--alert);
+         color: var(--alert-ink); padding: 12px 18px; border-radius: 999px; font-weight: 700;
+         box-shadow: 0 10px 30px rgba(0,0,0,.35); z-index: 10; max-width: calc(100vw - 32px); }
+.toast::before { content: "\25cf "; }
 
 @media (max-width: 480px) {
+  .app { padding-top: 20px; }
+  .top h1 { font-size: 26px; }
   .row { flex-direction: column; align-items: stretch; }
   .row input[type="text"] { flex: none; width: 100%; }
   .row button { width: 100%; }
+  .row .mic { width: 100%; }
+  .usage span { padding: 8px; }
   .events li { grid-template-columns: 96px 1fr; }
+  .events img, .events .shot { width: 96px; }
+}
+
+/* Respect people who ask for less motion or more contrast. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (prefers-contrast: more) {
+  :root { --muted: var(--text); --line: currentColor; }
+  .pill { background: #000; color: #fff; }
 }
 
 .telegram { margin-top: 16px; }
-.telegram a { color: var(--accent); }
+.telegram a { color: var(--brand); }
 .telegram p { color: var(--muted); font-size: 13px; }
-.telegram img { border-radius: 8px; }
+.telegram img { border-radius: var(--r-sm); }
+
+.notify .pill::before { content: none; } /* the badge text already says linked / not linked */
+
+/* the list is a scroll container in the rail, so it takes focus for keyboard scrolling */
+.events:focus-visible { border-radius: var(--r-sm); }
+
+/* ---------- full-size snapshot ---------- */
+/* Native <dialog>: modal focus trap, Esc to close and focus restore are the browser's job. */
+.shot-dialog { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px;
+               background: var(--panel); color: var(--text); box-shadow: var(--shadow);
+               max-width: min(96vw, 1000px); max-height: 92vh; position: relative; }
+.shot-dialog::backdrop { background: rgba(4, 7, 10, .72); backdrop-filter: blur(3px); }
+.shot-dialog[open] { animation: shot-in .16s ease-out; }
+@keyframes shot-in { from { opacity: 0; transform: translateY(6px); } }
+.shot-dialog img { display: block; width: auto; height: auto; max-width: 100%; max-height: 76vh;
+                   border-radius: var(--r-md); background: #000; margin: 0 auto; }
+.shot-close-form { margin: 0; }
+.shot-close { position: absolute; top: 18px; right: 18px; z-index: 1; width: 44px; height: 44px;
+              min-height: 44px; padding: 0; font-size: 16px; line-height: 1; border-radius: 999px;
+              background: var(--hud-bg); border: 1px solid var(--hud-line); color: var(--hud-text);
+              backdrop-filter: blur(8px); }
+.shot-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; padding: 12px 4px 2px; }
+.shot-meta b { font-size: 15px; font-weight: 650; }
+.shot-meta time { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) {
+  .shot-dialog { padding: 8px; max-width: 100vw; }
+  .shot-close { top: 14px; right: 14px; }
+}
