@@ -18,6 +18,7 @@
     <div class="viewfinder">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="canvas" hidden></canvas>
+      <button id="flip" type="button" class="flip" hidden aria-label="Switch camera" title="Switch camera">⟳</button>
       <div class="hud">
         <span id="gate" class="pill pill-idle">camera off</span>
         <span id="state" class="pill pill-idle">no rule</span>
@@ -36,8 +37,8 @@
       <p class="usage">tokens: <span id="usage">0</span>
         <button id="resetUsage" type="button" class="secondary" hidden>reset</button>
       </p>
-      <label class="slider">every <output id="sampleValue">1.0</output>s
-        <input id="sample" type="range" min="250" max="5000" step="250" value="1000">
+      <label class="slider">every <output id="sampleValue">1</output>s
+        <input id="sample" type="range" min="1000" max="10000" step="1000" value="1000">
       </label>
     </form>
   </section>
