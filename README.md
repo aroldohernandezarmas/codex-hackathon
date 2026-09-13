@@ -241,8 +241,8 @@ The gate and the perception prompt were shaped in `notebooks/`. To run them in V
 
 ## License
 
-Copyright (c) 2026 Vitaly Belov and Aroldo Hernandez Armas.
+Required Notice: Copyright (c) 2026 Vitaly Belov and Aroldo Hernandez Armas.
 
-Licensed under the [GNU Affero General Public License v3.0](LICENSE). You may use, modify and
-redistribute this code, but any modified version you run as a network service must publish its
-full source under the same license.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may read, run, modify
+and share this code for noncommercial purposes. Any commercial use requires written permission
+from the copyright holders.
