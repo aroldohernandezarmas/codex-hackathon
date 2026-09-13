@@ -238,11 +238,3 @@ The gate and the perception prompt were shaped in `notebooks/`. To run them in V
 `poetry install`, install the Python and Jupyter extensions, open an `.ipynb`, and pick
 `.venv/bin/python` as the kernel. `make notebook` starts Jupyter Lab on `:8889` for the
 `jupyter` MCP.
-
-## License
-
-Required Notice: Copyright (c) 2026 Vitaly Belov and Aroldo Hernandez Armas.
-
-Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may read, run, modify
-and share this code for noncommercial purposes. Any commercial use requires written permission
-from the copyright holders.
