@@ -14,12 +14,7 @@ from typing import Any, Optional, Protocol
 import httpx
 from loguru import logger
 
-from src.config import (
-    XAI_ATTEMPT_TIMEOUT,
-    XAI_PRICE_COMPLETION,
-    XAI_PRICE_PROMPT,
-    XAI_REQUEST_TIMEOUT,
-)
+from src.config import XAI_ATTEMPT_TIMEOUT, XAI_REQUEST_TIMEOUT
 
 BASE_URL = "https://api.x.ai/v1"
 
@@ -56,23 +51,28 @@ class PerceptionError(Exception):
 
 @dataclass
 class Usage:
-    """Tokens billed by the API. Mutable accumulator: `total += call`."""
+    """Tokens and money billed by the API. Mutable accumulator: `total += call`.
+
+    Cost comes from the response's `cost_in_usd_ticks` (1 tick = 1e-10 USD), so it
+    already reflects the model's real price list, cached-prompt discounts and image
+    tokens. No local price table to drift.
+    """
 
     prompt: int = 0
     completion: int = 0
     calls: int = 0
+    usd_ticks: int = 0
 
     def __iadd__(self, other: "Usage") -> "Usage":
         self.prompt += other.prompt
         self.completion += other.completion
         self.calls += other.calls
+        self.usd_ticks += other.usd_ticks
         return self
 
     @property
     def usd(self) -> float:
-        return (
-            self.prompt * XAI_PRICE_PROMPT + self.completion * XAI_PRICE_COMPLETION
-        ) / 1_000_000
+        return self.usd_ticks / 10_000_000_000
 
     def as_dict(self) -> dict:
         return {
@@ -186,6 +186,7 @@ class GrokPerception:
                     int(u.get("prompt_tokens", 0)),
                     int(u.get("completion_tokens", 0)),
                     1,
+                    int(u.get("cost_in_usd_ticks", 0)),
                 )
                 return body["choices"][0]["message"].get("content") or "", usage
             except (httpx.HTTPError, asyncio.TimeoutError) as e:

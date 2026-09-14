@@ -19,7 +19,7 @@ class FakePerception:
     def __init__(self) -> None:
         self.answers: list[bool] = []
         self.calls = 0
-        self.usage = (0, 0)  # (prompt, completion) billed per detect
+        self.usage = (0, 0, 0)  # (prompt, completion, usd_ticks) billed per detect
 
     async def normalize(self, rule: str) -> Rule:
         if rule == "a cat":
@@ -31,7 +31,8 @@ class FakePerception:
         self.calls += 1
         answer = self.answers.pop(0)
         return Detection(
-            [Observation(answer, "fake") for _ in predicates], Usage(*self.usage, 1)
+            [Observation(answer, "fake") for _ in predicates],
+            Usage(*self.usage[:2], 1, self.usage[2]),
         )
 
 
@@ -195,7 +196,7 @@ def test_errors_and_delete(world):
 
 def test_usage_accumulates_per_session_and_resets(world):
     client, perception, _ = world
-    perception.usage = (400, 10)
+    perception.usage = (400, 10, 13_500_000)
     sid = new_session(client)
     assert client.get(f"/session/{sid}/usage").json()["total"] == 0
     perception.answers = [True]
@@ -205,7 +206,7 @@ def test_usage_accumulates_per_session_and_resets(world):
         "completion": 10,
         "total": 410,
         "calls": 1,
-        "usd": 0.00135,  # 400*$3 + 10*$15 per 1M
+        "usd": 0.00135,  # 13_500_000 ticks * 1e-10
     }
     other = new_session(client)
     assert client.get(f"/session/{other}/usage").json()["total"] == 0

@@ -96,7 +96,11 @@ async def test_usage_is_read_from_response():
             200,
             json={
                 "choices": [{"message": {"content": '{"state_now": false}'}}],
-                "usage": {"prompt_tokens": 300, "completion_tokens": 12},
+                "usage": {
+                    "prompt_tokens": 300,
+                    "completion_tokens": 12,
+                    "cost_in_usd_ticks": 4456000,
+                },
             },
         )
 
@@ -106,7 +110,7 @@ async def test_usage_is_read_from_response():
         "completion": 12,
         "total": 312,
         "calls": 1,
-        "usd": 0.00108,  # 300*$3 + 12*$15 per 1M
+        "usd": 0.000446,  # ticks are 1e-10 USD, as billed by xAI
     }
 
 
