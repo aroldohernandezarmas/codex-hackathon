@@ -232,6 +232,25 @@ they hand over the camera.
 Sessions live in memory and expire after 30 seconds of silence. Settings are environment
 variables with defaults; see `.env.example` and `src/config.py`.
 
+## What it costs
+
+The counter on the page is not an estimate: every Grok response carries the exact
+amount billed for that call (`usage.cost_in_usd_ticks`, 1 tick = 1e-10 USD), and the
+session just adds them up. Cached prompt tokens and image tokens are already priced in.
+
+One call is one frame plus all your rules, about 520 prompt tokens with a single rule:
+240 for the image, the rest for the prompt text, which xAI mostly serves from cache.
+That is $0.0004 to $0.0006 on `grok-4.20-0309-non-reasoning`. What you pay per day is
+that number times how many frames reach the model, and two things decide that: the
+slider and the gate.
+
+![Watcher cost by frame interval: max assumes the gate passes every frame at $0.0006 per call, avg is a real session where the gate passed about 20% of frames at $0.0005 per call; 1 s interval is $52 per day worst case and $8.7 typical, 10 s is $5.2 and $0.9](docs/images/cost.png)
+
+Max is the ceiling: the scene changes every frame and the gate lets everything through.
+Avg is a measured session: a room where something happened now and then, the gate
+dropped four frames out of five. Cost is linear in the interval, so doubling the slider
+halves the bill. A tab in the background sends nothing.
+
 ## Notebooks
 
 The gate and the perception prompt were shaped in `notebooks/`. To run them in VS Code:
